@@ -136,15 +136,21 @@ function renderReviewPage(p: PendingDecision): string {
       </form>`;
 
   // Full diff, collapsed per file (files with review points open by default).
+  // A big PR is thousands of diff-line <div>s; parsing/laying them all out up front
+  // is what makes the page slow in the browser even after gzip. So only files with
+  // review points render inline — the rest go into an inert <template> and are
+  // materialized on first expand (see the toggle handler in page()), keeping the
+  // initial DOM small regardless of PR size.
   const withPoints = new Set(d.reviewPoints.map((rp) => rp.path));
   const diffSection = files.length
     ? `<h2>改动 diff（按文件折叠）</h2>` +
       files
         .map((f) => {
-          const open = withPoints.has(f.path) ? "open" : "";
-          const tag = withPoints.has(f.path) ? " · 有审查意见" : "";
           const lines = parsedByPath.get(f.path) ?? [];
-          return `<details ${open}><summary>${esc(f.path)}${tag}</summary><pre class="code">${renderPatch(lines)}</pre></details>`;
+          const body = `<pre class="code">${renderPatch(lines)}</pre>`;
+          return withPoints.has(f.path)
+            ? `<details open><summary>${esc(f.path)} · 有审查意见</summary>${body}</details>`
+            : `<details><summary>${esc(f.path)}</summary><template>${body}</template></details>`;
         })
         .join("")
     : "";
@@ -311,9 +317,13 @@ function send(res: ServerResponse, status: number, html: string): void {
   };
   // The review page inlines the whole PR diff and can reach several MB of highly
   // compressible text; gzip turns that into a few hundred KB so it opens fast even
-  // over a slow tunnel. Skip tiny bodies where compression isn't worth it.
-  const accepts = /\bgzip\b/.test(String(res.req?.headers["accept-encoding"] ?? ""));
-  if (accepts && body.length > 1400) {
+  // over a slow tunnel. Compress any large body unless the client explicitly refuses
+  // gzip: curl and other tools send no Accept-Encoding at all, which per HTTP means
+  // "any encoding is fine", so we default to compressing and only bail when a header
+  // is present that excludes gzip. Skip tiny bodies where it isn't worth it.
+  const ae = String(res.req?.headers["accept-encoding"] ?? "");
+  const rejectsGzip = ae !== "" && !/\bgzip\b/.test(ae) && !/[*]/.test(ae);
+  if (!rejectsGzip && body.length > 1400) {
     const gz = gzipSync(body);
     headers["content-encoding"] = "gzip";
     headers["content-length"] = gz.length;
@@ -370,6 +380,16 @@ function page(title: string, inner: string): string {
 <script>
 function setLang(l){document.documentElement.dataset.lang=l;
   for(var b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.l===l);}
+// Materialize a file's deferred diff the first time its <details> is opened. The
+// toggle event doesn't bubble, so listen in the capture phase.
+document.addEventListener('toggle',function(e){
+  var d=e.target;
+  if(!d||d.tagName!=='DETAILS'||!d.open) return;
+  var t=d.querySelector('template');
+  if(!t) return;
+  d.appendChild(t.content.cloneNode(true));
+  t.remove();
+},true);
 </script></body></html>`;
 }
 
