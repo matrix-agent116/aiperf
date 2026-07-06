@@ -124,7 +124,7 @@ export class TelegramBot {
       await ctx.answerCallbackQuery("已忽略");
     });
 
-    // Edited draft: user sends plain text after tapping "✏️ 修改"
+    // Edited draft: user sends plain text after tapping the Edit button
     bot.on("message:text", async (ctx) => {
       const chatId = String(ctx.chat.id);
       const p = this.store.findAwaitingEdit(chatId);

@@ -17,7 +17,7 @@ export async function judge(item: TriageItem, model: string): Promise<Decision> 
     const prompt =
       attempt === 1
         ? userPrompt
-        : `${userPrompt}\n\n[上次输出无法解析]: ${lastError}\n请严格只输出一个合法 JSON 对象，不要任何多余文字或代码块。`;
+        : `${userPrompt}\n\n[previous output could not be parsed]: ${lastError}\nOutput exactly one valid JSON object, with no extra text and no code fences.`;
 
     lastText = await runQuery(prompt, model);
     const json = extractJson(lastText);

@@ -1,126 +1,126 @@
 # gh-triage-agent
 
-配置驱动、多仓库轮询、**人在环路**的 GitHub Issue/PR 判定 Agent。
+A config-driven, multi-repo, **human-in-the-loop** GitHub issue/PR triage agent.
 
-监控 `config.yaml` 里配置的仓库，对**别人**提交的 issue / PR 用 Claude 判定「要不要回复」以及「下一步动作」，然后把判断 + 上下文推送到 **Telegram**。所有对 GitHub 的写操作（发评论、关 issue、批准/拒绝 PR、打标签）**都要你在 Telegram 上按钮确认后才执行**——bot 绝不自动操作。
+It watches the repos listed in `config.yaml`, uses Claude to judge issues/PRs opened by **others** — "does this need a reply?" and "what's the next action?" — then pushes the decision + context to **Telegram**. Every write to GitHub (posting a comment, closing an issue, approving/rejecting a PR, adding labels) **happens only after you confirm it from Telegram (or the review page)** — the bot never acts on its own.
 
-## 为什么不是又一个 GitHub Action
+## Why not just another GitHub Action
 
-现有开源方案（`anthropics/claude-code-action`、Issue AI Agent、`Elifterminal/pr-triage`）几乎都是 GitHub Action：绑单仓库、事件触发、AI 直接发评论。本项目相反：一个常驻进程集中轮询多个仓库，判定结果先给人拍板，再回写 GitHub。
+Existing open-source options (`anthropics/claude-code-action`, Issue AI Agent, `Elifterminal/pr-triage`) are almost all GitHub Actions: bound to a single repo, event-triggered, with the AI commenting directly. This project is the opposite: one long-running process that centrally polls many repos, and routes every decision through a human before writing back to GitHub.
 
-## 架构
+## Architecture
 
 ```
-常驻 Node 进程
-├─ Poll Loop（每 N 分钟）
-│   Octokit 拉「他人提交、游标之后」的 issue/PR
-│     → Claude Agent SDK 判定（结构化 Decision）
-│       → 推 Telegram（带内联按钮）→ 存 pending + 推进游标
-└─ Telegram Loop（grammy 长轮询）
-    接按钮回调 / 修改文本 → Octokit 回写 GitHub → 编辑消息回执
+Long-running Node process
+├─ Poll loop (every N minutes)
+│   Octokit fetches issues/PRs opened by others, updated after the cursor
+│     → Claude Agent SDK judges (structured Decision)
+│       → push to Telegram (inline buttons) → store pending + advance cursor
+└─ Telegram loop (grammy long polling)
+    button callbacks / edited text → Octokit writes back to GitHub → edit the card with a receipt
 ```
 
-- **判定**（读）：Claude Agent SDK，只做推理不给任何工具，上下文由 poller 组装齐全。
-- **拉取 + 回写**（读/写）：Octokit，写操作只在人工确认后触发。
-- **状态**：`node:sqlite` 单文件（游标 + 去重指纹 + pending 决策），进程重启后按钮仍可用。
+- **Judging** (read): Claude Agent SDK, pure reasoning with no tools; the poller assembles the full context.
+- **Fetch + write-back** (read/write): Octokit; writes fire only after human confirmation.
+- **State**: a single `node:sqlite` file (cursor + dedupe fingerprints + pending decisions); buttons keep working across restarts.
 
-## 安装
+## Install
 
 ```bash
-npm install          # 纯 JS 依赖，无需原生编译
-cp .env.example .env # 填 3 个 token
+npm install          # pure-JS deps, no native build
+cp .env.example .env # fill in the 3 tokens
 cp config.example.yaml config.yaml
 ```
 
-需要 **Node.js ≥ 22**（用内置 `node:sqlite` 和原生 TS 执行）。已在 Node 26 上验证。
+Requires **Node.js ≥ 22** (uses the built-in `node:sqlite` and native TypeScript execution). Verified on Node 26.
 
-### 环境变量（`.env`）
+### Environment variables (`.env`)
 
-| 变量 | 说明 |
+| Variable | Notes |
 |---|---|
-| `CLAUDE_CODE_OAUTH_TOKEN` | **判定用，推荐**。先在终端跑 `claude setup-token` 生成，直接用你的 Claude Code 订阅，无需 API key |
-| `GITHUB_TOKEN` | PAT/App token，**需对被监控仓库有写权限** |
-| `TELEGRAM_BOT_TOKEN` | 找 [@BotFather](https://t.me/BotFather) 创建 |
+| `CLAUDE_CODE_OAUTH_TOKEN` | **For judging, recommended.** Generate it with `claude setup-token`; uses your Claude Code subscription, no API key needed. |
+| `GITHUB_TOKEN` | PAT / App token — **must have write access to the watched repos**. |
+| `TELEGRAM_BOT_TOKEN` | Create one via [@BotFather](https://t.me/BotFather). |
 
-> 判定走 Claude Agent SDK（底层是自带的 Claude Code 二进制），认证二选一：
-> - **`CLAUDE_CODE_OAUTH_TOKEN`**（推荐）—— `claude setup-token` 生成，用订阅额度；
-> - 或 `ANTHROPIC_API_KEY` —— 按 API 计费。
-> 两者都设时 API key 会覆盖 OAuth token，只留一个即可。
+> Judging runs through the Claude Agent SDK (which drives the bundled Claude Code binary). Two auth options:
+> - **`CLAUDE_CODE_OAUTH_TOKEN`** (recommended) — from `claude setup-token`, billed to your subscription; or
+> - `ANTHROPIC_API_KEY` — billed per API usage.
+> If both are set the API key overrides the OAuth token — keep only one.
 
-> ⚠️ 因为要能关 issue / 审批 PR，被监控的仓库必须是你有写权限（维护者/协作者）的仓库。
+> ⚠️ Because it needs to close issues / review PRs, the watched repos must be ones you have write access to (maintainer/collaborator).
 
-### 配置（`config.yaml`）
+### Config (`config.yaml`)
 
 ```yaml
 poll_interval_minutes: 5
 model: claude-opus-4-8
 telegram:
-  chat_id: "123456789"        # 用 @userinfobot 查你的 chat_id
-lookback_days_on_first_run: 7 # 首次只看最近 7 天，避免拉整个历史
-reminder_after_hours: 24      # 卡片未处理时，每隔 N 小时催一次；0 关闭
-http:                         # 草稿回复由本服务网页展示，卡片只放链接
+  chat_id: "123456789"        # find your chat_id via @userinfobot
+lookback_days_on_first_run: 7 # first poll only looks back this many days, not the whole history
+reminder_after_hours: 24      # nudge every N hours while a card is un-actioned; 0 disables
+http:                         # draft/review pages served by this service; cards carry only a link
   port: 8787
-  base_url: "http://localhost:8787"  # 外部可达地址；不填默认 http://localhost:<port>
+  base_url: "http://localhost:8787"  # externally reachable address; defaults to http://localhost:<port>
 repos:
   - url: https://github.com/owner/repo
     watch: [issues, pulls]
-    only_from_others: true    # 只处理非维护者提交的（按 author_association 判断）
-    ignore_authors: []        # 额外忽略的作者（如自己的 bot）
+    only_from_others: true    # only items from non-maintainers (by author_association)
+    ignore_authors: []        # extra authors to ignore (e.g. your own bot)
 ```
 
-## 运行
+## Run
 
 ```bash
-npm start          # 常驻 daemon（轮询 + Telegram 长轮询）
-npm run poll-once  # 只跑一轮，判定并推送后退出（调链路用）
-npm run typecheck  # tsc 类型检查
+npm start          # long-running daemon (polling + Telegram long polling)
+npm run poll-once  # single cycle: judge + push, then exit (for testing the pipeline)
+npm run typecheck  # tsc type check
 ```
 
-## Telegram 交互
+## Telegram interaction
 
-- **需要回复（issue）**：卡片上「💬 草稿回复」是一个链接（`http.base_url` + `/reply/<id>`，展示草稿全文）；按钮 `✅ 批准并回复` / `✏️ 修改` / `🚫 忽略`。
-  - 点「修改」后直接发一条文本，bot 用你的文本发**普通评论**到 issue；回执附上评论链接。
-- **需要回复（PR）**：判定会产出**逐条、挂到代码行的审查意见**。卡片给一个 URL 按钮 `🔎 逐条审核并提交`（+ `🚫 忽略`），点开是本服务的**富审查网页**（`/review/<id>?t=<token>`）：
-  - 每条意见展示 严重度 / `文件:行` / 意见 / 依据 / 对应代码片段，逐条勾选是否采纳。
-  - 提交后作为**一次 `COMMENT` review**发到 GitHub：能定位到改动行的作为**行内评论**，无法定位的自动进 **review 正文**（不丢意见、也不会被 GitHub 拒绝）。
-  - 提交成功后 Telegram 卡片收尾并附上这次 review 的链接。
-  - 网页链接带 `token` 鉴权（每张卡一个），拿到链接即可查看+提交。
-- **不需要回复**：展示建议动作 + 理由，按钮 `✅ 执行「动作」` / `🚫 忽略`（`pulls.createReview` 的 APPROVE / REQUEST_CHANGES 等）。
-- 每次操作后原消息去掉按钮并追加回执（✅ 已回复 / ✅ 已提交 PR Review / ✅ 已关闭 …），防重复点击。
-- 网页由 daemon 内置 HTTP 服务提供（`npm start` 随之启动，监听 `http.port`）；`npm run poll-once` 不启动该服务，链接打不开。
+- **Reply needed (issue)**: the card's "💬 draft reply" is a link (`http.base_url` + `/reply/<id>`, showing the full draft); buttons `✅ Approve & reply` / `✏️ Edit` / `🚫 Ignore`.
+  - Tap Edit, then send a plain text message — the bot posts **that text** as a comment on the issue; the receipt includes the comment link.
+- **Reply needed (PR)**: judging produces **per-line review points anchored to the code**. The card shows a URL button `🔎 Review & submit` (+ `🚫 Ignore`) that opens the **rich review page** (`/review/<id>?t=<token>`):
+  - Each point shows severity / `file:line` / comment / evidence / the matching code snippet; tick the ones to adopt.
+  - On submit it's sent as **one `COMMENT` review**: points that anchor to a changed line become **inline comments**; the rest fall into the **review body** (nothing is dropped, and GitHub never 422s).
+  - After a successful submit the Telegram card is finalized with a link to the review.
+  - The page link is token-gated (one token per card) — whoever has the link can view and submit.
+- **No reply needed**: shows the suggested action + rationale, buttons `✅ Do <action>` / `🚫 Ignore` (`pulls.createReview` APPROVE / REQUEST_CHANGES, etc.).
+- After any action the card's buttons are removed and a receipt is appended (✅ replied / ✅ PR review submitted / ✅ closed …) to prevent double taps.
+- Pages are served by the daemon's built-in HTTP service (started with `npm start`, listening on `http.port`); `npm run poll-once` does not start it, so the links won't open.
 
-支持的动作：发评论、关闭 issue、批准 PR、要求修改 PR、关闭 PR、打标签。
+Supported actions: post a comment, close an issue, approve a PR, request changes on a PR, close a PR, add labels.
 
-### 逾期提醒
+### Overdue reminders
 
-卡片推送后若一直没处理，bot 会**每隔 `reminder_after_hours`（默认 24h）催一次**（回复在原卡片下，显示已拖了多少小时），直到你处理为止；处理后（回复/执行/忽略）自动停。检查频率跟随轮询间隔，`reminder_after_hours: 0` 可关闭。
+While a card stays un-actioned, the bot **nudges every `reminder_after_hours` (default 24h)** — a reply under the original card showing how long it's been pending — until you handle it; it stops once actioned (replied/executed/ignored). The check runs at the poll interval; `reminder_after_hours: 0` disables it.
 
-### 同一条的去重
+### Dedupe for the same item
 
-- 已推送处理过的 issue/PR 不会重复推（按 `编号@updated_at` 指纹去重，落库、重启仍在）。
-- 未批示、且该 issue/PR **没有新活动** → 不会重复推，静等你处理。
-- 未批示、但该 issue/PR **来了新评论/被编辑**（`updated_at` 变了）→ 会重新判定并推一张新卡，同时**自动取消旧卡**（去掉按钮、标注已被取代），保证同一条只剩最新一张能点。
-- 判定或推送**失败**的条目不会被误标为已处理，下一轮会重试，不会被静默漏掉。
+- Already-pushed issues/PRs aren't pushed again (deduped by a `number@updated_at` fingerprint, persisted, survives restarts).
+- Un-actioned and **no new activity** → not re-pushed; it just waits for you.
+- Un-actioned but the issue/PR **got a new comment / was edited** (`updated_at` changed) → it's re-judged and a fresh card is pushed, and the **stale card is auto-cancelled** (buttons removed, marked superseded) so only the newest card for an item stays actionable.
+- Items that **fail** to judge or push are not marked processed, and are retried next cycle rather than silently dropped.
 
-## 目录
+## Layout
 
 ```
 src/
-  index.ts            # 入口：poll loop + telegram loop
-  config.ts           # 读取 + zod 校验 config.yaml
-  store.ts            # node:sqlite 持久化
-  server.ts           # 内置 HTTP 服务：issue 草稿页 + PR 富审查页/提交
-  diff.ts             # unified-diff 解析（行号 / 可评论行）
+  index.ts            # entry: poll loop + telegram loop
+  config.ts           # load + zod-validate config.yaml
+  store.ts            # node:sqlite persistence
+  server.ts           # built-in HTTP service: issue draft page + PR review page/submit
+  diff.ts             # unified-diff parsing (line numbers / commentable lines)
   types.ts            # TriageItem / PrContext
   github/
-    client.ts         # Octokit 单例
-    poller.ts         # 拉取 + 组装判定 payload
-    actions.ts        # 回写 GitHub
+    client.ts         # Octokit singleton
+    poller.ts         # fetch + assemble the judging payload
+    actions.ts        # write back to GitHub
   judge/
-    judge.ts          # Claude Agent SDK 调用 + JSON 解析重试
-    prompt.ts         # 判定 prompt
-    schema.ts         # Decision 的 zod schema
+    judge.ts          # Claude Agent SDK call + JSON-parse retry
+    prompt.ts         # judging prompt
+    schema.ts         # zod schema for Decision
   telegram/
-    bot.ts            # grammy bot + 回调/修改文本处理
-    render.ts         # Decision → Telegram 消息 + 按钮
+    bot.ts            # grammy bot + callback / edited-text handling
+    render.ts         # Decision → Telegram message + buttons
 ```
