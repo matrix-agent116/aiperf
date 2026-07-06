@@ -78,6 +78,9 @@ npm run typecheck  # tsc type check
 
 ## Telegram interaction
 
+> Reply drafts are bilingual: the text **posted to GitHub is English** (`draftReply` / each review point's `comment`), and a parallel **Chinese** version (`draftReplyZh` / `commentZh`) is shown only to help you understand — it is never posted. `reasoning` is Chinese (for you) and never posted.
+
+
 - **Reply needed (issue)**: the card's "💬 draft reply" is a link (`http.base_url` + `/reply/<id>`, showing the full draft); buttons `✅ Approve & reply` / `✏️ Edit` / `🚫 Ignore`.
   - Tap Edit, then send a plain text message — the bot posts **that text** as a comment on the issue; the receipt includes the comment link.
 - **Reply needed (PR)**: judging produces **per-line review points anchored to the code**. The card shows a URL button `🔎 Review & submit` (+ `🚫 Ignore`) that opens the **rich review page** (`/review/<id>?t=<token>`):

@@ -60,7 +60,8 @@ function serveReply(store: Store, id: string, res: ServerResponse): void {
   const p = store.getPending(id);
   if (!p) return send(res, 404, page("未找到", "<p>该草稿不存在或已过期。</p>"));
   const typeLabel = p.itemType === "pull_request" ? "PR" : "Issue";
-  const draft = p.draftReply?.trim() || "(无草稿回复)";
+  const en = p.decision.draftReply?.trim() || "(no draft)";
+  const zh = p.decision.draftReplyZh?.trim() || "";
   send(
     res,
     200,
@@ -69,7 +70,8 @@ function serveReply(store: Store, id: string, res: ServerResponse): void {
       `<h1>${esc(p.owner)}/${esc(p.repo)} · ${typeLabel} #${p.number}</h1>
        <p class="meta"><a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">在 GitHub 打开</a> · 状态: ${esc(p.status)}</p>
        <h2>判断依据</h2><p>${esc(p.decision.reasoning)}</p>
-       <h2>草稿回复</h2><pre>${esc(draft)}</pre>`,
+       ${zh ? `<h2>草稿回复（中文，仅供理解）</h2><pre>${esc(zh)}</pre>` : ""}
+       <h2>Draft reply (English — this is what gets posted)</h2><pre>${esc(en)}</pre>`,
     ),
   );
 }
@@ -78,7 +80,8 @@ function serveReply(store: Store, id: string, res: ServerResponse): void {
 function renderReviewPage(p: PendingDecision): string {
   const d = p.decision;
   const patchByPath = new Map((p.context?.files ?? []).map((f) => [f.path, f.patch]));
-  const overall = d.draftReply?.trim() || "(无总体意见)";
+  const overallEn = d.draftReply?.trim() || "";
+  const overallZh = d.draftReplyZh?.trim() || "";
   const done = p.status !== "pending" && p.status !== "awaiting_edit";
 
   const items = d.reviewPoints
@@ -93,7 +96,8 @@ function renderReviewPage(p: PendingDecision): string {
         <label><input type="checkbox" name="pt" value="${i}" checked ${done ? "disabled" : ""}>
           <span class="sev sev-${esc(pt.severity)}">${esc(pt.severity)}</span>
           <code>${loc}</code>${warn}</label>
-        <div class="cmt">${esc(pt.comment)}</div>
+        ${pt.commentZh ? `<div class="cmt">${esc(pt.commentZh)}</div>` : ""}
+        <div class="en">EN (posted): ${esc(pt.comment)}</div>
         ${pt.evidence ? `<div class="ev">依据：${esc(pt.evidence)}</div>` : ""}
         ${code ? `<pre class="code">${code}</pre>` : ""}
       </li>`;
@@ -101,13 +105,18 @@ function renderReviewPage(p: PendingDecision): string {
     .join("");
 
   const list = `<ul class="pts">${items || "<li>（无逐行意见，提交后仅发送总体意见正文）</li>"}</ul>`;
+  const zhBlock = overallZh
+    ? `<h2>总体意见（中文，仅供理解）</h2><pre>${esc(overallZh)}</pre>`
+    : "";
   const inner = done
-    ? `<h2>总体意见（review 正文）</h2><pre>${esc(overall)}</pre>
+    ? `${zhBlock}
+       <h2>Review body (English — posted)</h2><pre>${esc(overallEn || "(none)")}</pre>
        <h2>逐条审查意见</h2>${list}
        <p class="meta">该 PR 已处理（状态：${esc(p.status)}），无法再次提交。</p>`
-    : `<form method="post" action="/review/${p.id}?t=${encodeURIComponent(p.token)}">
-        <h2>总体意见（review 正文，可编辑）</h2>
-        <textarea name="body" rows="6" placeholder="留空则不发送总体正文">${esc(overall === "(无总体意见)" ? "" : overall)}</textarea>
+    : `${zhBlock}
+       <form method="post" action="/review/${p.id}?t=${encodeURIComponent(p.token)}">
+        <h2>Review body (English — this is what gets posted, editable)</h2>
+        <textarea name="body" rows="6" placeholder="Leave empty to post no overall body">${esc(overallEn)}</textarea>
         <h2>逐条审查意见（勾选采纳，未勾选不提交）</h2>
         ${list}
         <button type="submit">提交采纳项到 GitHub</button>
@@ -163,7 +172,21 @@ async function handleSubmit(
     return send(res, 400, page("无内容", "<p>没有勾选任何意见，也没有总体正文，未提交。</p>"));
   }
 
-  const url = await submitPrReview(p, body, comments);
+  let url: string;
+  try {
+    url = await submitPrReview(p, body, comments);
+  } catch (e) {
+    // Keep the card pending so it can be retried after fixing the cause.
+    const msg = (e as Error).message;
+    const hint = /not accessible|403/i.test(msg)
+      ? `<p class="meta">看起来是 GITHUB_TOKEN 权限不够：提交 PR review 需要该仓库的 <b>Pull requests: Write</b> 权限（细粒度 PAT 里勾 Pull requests / Read and write，或经典 PAT 勾 <code>repo</code>）。改好 token、重启后回到本页重新提交即可——本条尚未提交、状态未变。</p>`
+      : "";
+    return send(
+      res,
+      502,
+      page("提交失败", `<h1>提交到 GitHub 失败</h1><p>${esc(msg)}</p>${hint}`),
+    );
+  }
   store.setPendingStatus(p.id, "replied");
   const receipt = `✅ 已提交 PR Review（行内 ${comments.length} 条）· 🔗 <a href="${esc(url)}">在 GitHub 查看</a>`;
   onSubmitted?.(p.id, receipt);
@@ -249,6 +272,7 @@ function page(title: string, inner: string): string {
   a{color:#0969da}
   ul.pts{list-style:none;padding:0} li.pt{border:1px solid #e1e4e8;border-radius:8px;padding:.75rem 1rem;margin:.75rem 0}
   li.pt label{cursor:pointer} .cmt{margin:.4rem 0} .ev{color:#666;font-size:.9rem}
+  .en{margin:.3rem 0;font-size:.9rem;color:#444;border-left:3px solid #d0d7de;padding-left:.5rem}
   .sev{font-size:.75rem;font-weight:600;padding:.05rem .4rem;border-radius:4px;margin:0 .3rem}
   .sev-blocker{background:#ffdce0;color:#b31d28} .sev-suggestion{background:#ddf4ff;color:#0969da}
   .sev-nit{background:#eef;color:#555} .sev-question{background:#fff5b1;color:#7a5b00}
@@ -259,7 +283,7 @@ function page(title: string, inner: string): string {
   textarea{width:100%;box-sizing:border-box;font:inherit;padding:.6rem;border:1px solid #e1e4e8;border-radius:6px;background:#f6f8fa;color:inherit}
   @media(prefers-color-scheme:dark){
     body{background:#0d1117;color:#c9d1d9} pre,li.pt,textarea{background:#161b22;border-color:#30363d}
-    h2,.meta,.ev{color:#8b949e} a{color:#58a6ff} code{background:#161b22}
+    h2,.meta,.ev{color:#8b949e} .en{color:#adbac7;border-color:#30363d} a{color:#58a6ff} code{background:#161b22}
     pre.code .hl{background:#3f2e00}
   }
 </style></head><body>${inner}</body></html>`;

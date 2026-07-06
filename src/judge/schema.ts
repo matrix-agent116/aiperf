@@ -18,7 +18,10 @@ export const ReviewPointSchema = z.object({
   path: z.string(),
   line: z.number().int().positive().nullable(),
   severity: SeverityEnum.default("suggestion"),
+  /** English — this is what gets posted inline on GitHub */
   comment: z.string(),
+  /** Chinese rendering, shown to the human for understanding; NOT posted */
+  commentZh: z.string().optional(),
   /** what in the diff this is based on (quote/snippet) */
   evidence: z.string().optional(),
 });
@@ -28,9 +31,11 @@ export const DecisionSchema = z
   .object({
     itemType: z.enum(["issue", "pull_request"]),
     needsReply: z.boolean(),
-    /** Draft reply (Markdown) when needsReply=true. For a PR this is the review's
-     *  top-level body; per-line points go in reviewPoints. */
+    /** English — the reply actually POSTED to GitHub when needsReply=true.
+     *  For a PR this is the review's top-level body; per-line points go in reviewPoints. */
     draftReply: z.string().optional(),
+    /** Chinese rendering of draftReply, shown to the human for understanding; NOT posted */
+    draftReplyZh: z.string().optional(),
     /** PR only: per-line review points, each anchored to a changed line */
     reviewPoints: z.array(ReviewPointSchema).default([]),
     /** Suggested next action when needsReply=false */
