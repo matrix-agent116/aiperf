@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { gzipSync } from "node:zlib";
 import type { Store, PendingDecision } from "./store.ts";
-import { parsePatch, commentableLines } from "./diff.ts";
+import { parsePatch, commentableLines, type DiffLine } from "./diff.ts";
 import { submitPrReview, type InlineComment } from "./github/actions.ts";
 
 type OnSubmitted = (id: string, receipt: string) => void;
@@ -80,19 +81,31 @@ function serveReply(store: Store, id: string, res: ServerResponse): void {
 // ---- PR review page ----
 function renderReviewPage(p: PendingDecision): string {
   const d = p.decision;
-  const patchByPath = new Map((p.context?.files ?? []).map((f) => [f.path, f.patch]));
+  const files = p.context?.files ?? [];
+  // Parse each file's patch once and reuse it for anchoring, snippets and the full
+  // diff — a point-heavy PR would otherwise re-parse the same patch many times.
+  const parsedByPath = new Map(files.map((f) => [f.path, parsePatch(f.patch)]));
+  const commentableCache = new Map<string, Set<number>>();
+  const commentableFor = (path: string): Set<number> => {
+    let s = commentableCache.get(path);
+    if (!s) {
+      const lines = parsedByPath.get(path);
+      s = lines ? commentableFrom(lines) : new Set<number>();
+      commentableCache.set(path, s);
+    }
+    return s;
+  };
   const overallEn = d.draftReply?.trim() || "";
   const overallZh = d.draftReplyZh?.trim() || "";
   const done = p.status !== "pending" && p.status !== "awaiting_edit";
 
   const items = d.reviewPoints
     .map((pt, i) => {
-      const patch = patchByPath.get(pt.path);
-      const anchored =
-        pt.line != null && patch ? commentableLines(patch).has(pt.line) : false;
+      const lines = parsedByPath.get(pt.path);
+      const anchored = pt.line != null && lines ? commentableFor(pt.path).has(pt.line) : false;
       const loc = `${esc(pt.path)}${pt.line != null ? `:${pt.line}` : ""}`;
       const warn = anchored ? "" : ` <span class="warn">（无法定位到改动行，将进 review 正文）</span>`;
-      const code = pt.line != null && patch ? snippet(patch, pt.line) : "";
+      const code = pt.line != null && lines ? snippet(lines, pt.line) : "";
       return `<li class="pt">
         <label><input type="checkbox" name="pt" value="${i}" checked ${done ? "disabled" : ""}>
           <span class="sev sev-${esc(pt.severity)}">${esc(pt.severity)}</span>
@@ -124,14 +137,14 @@ function renderReviewPage(p: PendingDecision): string {
 
   // Full diff, collapsed per file (files with review points open by default).
   const withPoints = new Set(d.reviewPoints.map((rp) => rp.path));
-  const files = p.context?.files ?? [];
   const diffSection = files.length
     ? `<h2>改动 diff（按文件折叠）</h2>` +
       files
         .map((f) => {
           const open = withPoints.has(f.path) ? "open" : "";
           const tag = withPoints.has(f.path) ? " · 有审查意见" : "";
-          return `<details ${open}><summary>${esc(f.path)}${tag}</summary><pre class="code">${renderPatch(f.patch)}</pre></details>`;
+          const lines = parsedByPath.get(f.path) ?? [];
+          return `<details ${open}><summary>${esc(f.path)}${tag}</summary><pre class="code">${renderPatch(lines)}</pre></details>`;
         })
         .join("")
     : "";
@@ -146,9 +159,18 @@ function renderReviewPage(p: PendingDecision): string {
   );
 }
 
+/** New-file lines GitHub accepts an inline comment on, from already-parsed lines. */
+function commentableFrom(lines: DiffLine[]): Set<number> {
+  const set = new Set<number>();
+  for (const l of lines) {
+    if ((l.type === "add" || l.type === "ctx") && l.newLine != null) set.add(l.newLine);
+  }
+  return set;
+}
+
 /** Render a whole file patch with new-file line numbers and +/- coloring. */
-function renderPatch(patch: string): string {
-  return parsePatch(patch)
+function renderPatch(lines: DiffLine[]): string {
+  return lines
     .map((l) => {
       if (l.type === "hunk") return `<div class="dh">${esc(l.text)}</div>`;
       const num = l.newLine != null ? String(l.newLine).padStart(5) : "     ";
@@ -160,8 +182,7 @@ function renderPatch(patch: string): string {
 }
 
 /** A few lines of context around a target new-file line, with it highlighted. */
-function snippet(patch: string, line: number): string {
-  const lines = parsePatch(patch);
+function snippet(lines: DiffLine[], line: number): string {
   const idx = lines.findIndex((l) => l.newLine === line);
   if (idx < 0) return "";
   const from = Math.max(0, idx - 3);
@@ -284,8 +305,25 @@ function readBody(req: IncomingMessage): Promise<string> {
 }
 
 function send(res: ServerResponse, status: number, html: string): void {
-  res.writeHead(status, { "content-type": "text/html; charset=utf-8" });
-  res.end(html);
+  const body = Buffer.from(html, "utf8");
+  const headers: Record<string, string | number> = {
+    "content-type": "text/html; charset=utf-8",
+  };
+  // The review page inlines the whole PR diff and can reach several MB of highly
+  // compressible text; gzip turns that into a few hundred KB so it opens fast even
+  // over a slow tunnel. Skip tiny bodies where compression isn't worth it.
+  const accepts = /\bgzip\b/.test(String(res.req?.headers["accept-encoding"] ?? ""));
+  if (accepts && body.length > 1400) {
+    const gz = gzipSync(body);
+    headers["content-encoding"] = "gzip";
+    headers["content-length"] = gz.length;
+    res.writeHead(status, headers);
+    res.end(gz);
+    return;
+  }
+  headers["content-length"] = body.length;
+  res.writeHead(status, headers);
+  res.end(body);
 }
 
 /** Global language-tab UI: default Chinese, click to reveal English blocks. */
