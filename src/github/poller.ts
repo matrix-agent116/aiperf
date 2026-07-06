@@ -3,9 +3,10 @@ import type { Store } from "../store.ts";
 import { itemKey, type TriageItem } from "../types.ts";
 import { getOctokit } from "./client.ts";
 
-const MAX_BODY = 6000;
+const MAX_BODY = 8000;
 const MAX_COMMENTS = 10;
-const MAX_DIFF = 6000;
+const MAX_DIFF = 1_000_000; // total inline diff budget fed to the model (it can get_file the rest)
+const MAX_FILES = 3000; // cap on changed files fetched for a PR (GitHub's own max)
 const MAX_PAGES = 5; // max pages per repo per cycle, guards against huge first-run pulls
 
 /** Authors with these associations count as maintainers; skipped when only_from_others */
@@ -136,39 +137,49 @@ async function fetchPrDetails(
   number: number,
 ): Promise<Partial<TriageItem>> {
   const gh = getOctokit();
-  const [pr, files] = await Promise.all([
+  const [pr, allFiles] = await Promise.all([
     gh.rest.pulls.get({ owner: rc.owner, repo: rc.repo, pull_number: number }),
-    gh.rest.pulls.listFiles({
+    gh.paginate(gh.rest.pulls.listFiles, {
       owner: rc.owner,
       repo: rc.repo,
       pull_number: number,
       per_page: 100,
     }),
   ]);
+  const files = allFiles.slice(0, MAX_FILES);
 
-  const header =
-    `${files.data.length} files changed, +${pr.data.additions}/-${pr.data.deletions}` +
-    (pr.data.draft ? " (draft)" : "");
-  const fileLines = files.data
+  // Include as many per-file patches inline as fit the budget (skip, don't stop,
+  // so a huge early file doesn't starve the rest). Files not shown inline are
+  // still listed in changedFiles so the model can get_file them.
+  const structured: { path: string; patch: string }[] = [];
+  let used = 0;
+  for (const f of files) {
+    if (f.patch && used + f.patch.length <= MAX_DIFF) {
+      structured.push({ path: f.filename, patch: f.patch });
+      used += f.patch.length;
+    }
+  }
+  const shown = new Set(structured.map((s) => s.path));
+  const changedFiles = files.map((f) => ({
+    path: f.filename,
+    status: f.status,
+    additions: f.additions,
+    deletions: f.deletions,
+    shown: shown.has(f.filename),
+  }));
+
+  const fileLines = files
     .map((f) => `  ${f.status} ${f.filename} (+${f.additions}/-${f.deletions})`)
     .join("\n");
-
-  let patch = "";
-  const structured: { path: string; patch: string }[] = [];
-  for (const f of files.data) {
-    if (!f.patch) continue;
-    if (patch.length + f.patch.length > MAX_DIFF) {
-      patch += "\n... (diff truncated) ...";
-      break;
-    }
-    patch += `\n--- ${f.filename} ---\n${f.patch}\n`;
-    structured.push({ path: f.filename, patch: f.patch });
-  }
+  const header =
+    `${files.length} files changed, +${pr.data.additions}/-${pr.data.deletions}` +
+    (pr.data.draft ? " (draft)" : "");
 
   return {
     isDraft: pr.data.draft ?? false,
-    diffSummary: `${header}\n${fileLines}\n${patch}`.trim(),
+    diffSummary: `${header}\n${fileLines}`.trim(),
     files: structured,
+    changedFiles,
     headRef: pr.data.head.sha,
   };
 }

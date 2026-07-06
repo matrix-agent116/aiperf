@@ -63,7 +63,7 @@ async function runQuery(
       allowedTools: tools.allowedTools,
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
-      maxTurns: 8, // allow a few tool calls before the final answer
+      maxTurns: 20, // allow many tool calls so it can read the code before answering
     },
   })) {
     if (msg.type === "result" && msg.subtype === "success") {

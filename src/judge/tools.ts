@@ -33,6 +33,7 @@ export function buildGithubReadTools(
     "Read a file's full content from the repo (or list a directory). For a PR this defaults to the PR's head version. Use it to see code the diff doesn't show — the whole changed file, a caller, a referenced module.",
     { path: z.string(), ref: z.string().optional() },
     async ({ path, ref }) => {
+      console.log(`[judge] get_file ${owner}/${repo} ${path}${ref ? `@${ref}` : ""}`);
       try {
         const { data } = await getOctokit().rest.repos.getContent({
           owner,
@@ -59,6 +60,7 @@ export function buildGithubReadTools(
     "Read another issue or PR in this repo by number (title, state, body). Use it to check a linked/duplicate issue (e.g. 'Fixes #123').",
     { number: z.number().int().positive() },
     async ({ number }) => {
+      console.log(`[judge] get_issue ${owner}/${repo} #${number}`);
       try {
         const { data } = await getOctokit().rest.issues.get({
           owner,

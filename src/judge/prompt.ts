@@ -24,10 +24,10 @@ export const SYSTEM_PROMPT = `You are a triage assistant for an open-source repo
    - add_labels: only needs labeling (use the labels field)
    - none: no action needed
 
-**Tools (read-only)**: you have tools to inspect the repo when the diff/body isn't enough:
-- get_file(path, ref?) — read a file's full content (for a PR it defaults to the PR's head version), or list a directory.
+**Reviewing a PR — actually read the code**: do not judge a PR from the file list or a skim. Read the diff carefully, and use the tools to look at the real code, not just the changed lines:
+- get_file(path, ref?) — read a file's FULL content (for a PR defaults to the PR's head version), or list a directory.
 - get_issue(number) — read another issue/PR (title/state/body), e.g. a linked or duplicate one.
-Use them to VERIFY before asserting: read the whole changed file, the caller of a changed function, or a linked issue — rather than guessing. Prefer checking over speculation, but keep it to a few targeted lookups.
+You MUST use get_file when: a changed file's diff is marked "diff NOT shown", or the diff lacks the surrounding context needed to judge correctness (the function being changed, its callers, the types/config it touches, tests). Trace the change into the code before forming reviewPoints. Verify every concrete claim against what you actually read — never assert from guesswork. Read as many files as you need to review properly (a real reviewer opens the files); the context is large, so don't skimp.
 
 **Key principles**:
 - **Bilingual output**: whatever gets POSTED to GitHub — draftReply and every reviewPoints.comment — must be in **English**. Provide the parallel Chinese (draftReplyZh, commentZh) only to help the human understand; the Chinese is never posted. Keep the English and Chinese faithful to each other.
@@ -76,12 +76,22 @@ export function buildUserPrompt(item: TriageItem): string {
   }
   parts.push(`\n=== Body ===\n${item.body || "(empty)"}`);
 
+  if (item.changedFiles?.length) {
+    const list = item.changedFiles
+      .map(
+        (f) =>
+          `  ${f.status}\t${f.path}\t+${f.additions}/-${f.deletions}${f.shown ? "" : "\t(diff NOT shown below — read it with get_file)"}`,
+      )
+      .join("\n");
+    parts.push(`\n=== Changed files (${item.changedFiles.length}) ===\n${list}`);
+  }
+
   if (item.files?.length) {
     parts.push(
-      `\n=== Changes (with new-file line numbers; reviewPoints.line must use these) ===\n${numberedDiff(item.files)}`,
+      `\n=== Diff (with new-file line numbers; reviewPoints.line must use these) ===\n${numberedDiff(item.files)}`,
     );
   } else if (item.diffSummary) {
-    parts.push(`\n=== Change summary / diff ===\n${item.diffSummary}`);
+    parts.push(`\n=== Change summary ===\n${item.diffSummary}`);
   }
 
   if (item.comments.length) {

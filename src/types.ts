@@ -15,8 +15,16 @@ export interface TriageItem {
   comments: { author: string; body: string; createdAt: string }[];
   /** PR only: change summary (file count / added-removed lines / truncated diff) */
   diffSummary?: string;
-  /** PR only: per-file patches, used to anchor review points and render code on the page */
+  /** PR only: per-file patches shown inline (fit the budget), used to anchor review points */
   files?: { path: string; patch: string }[];
+  /** PR only: the complete changed-file list; `shown` = its diff is inline below */
+  changedFiles?: {
+    path: string;
+    status: string;
+    additions: number;
+    deletions: number;
+    shown: boolean;
+  }[];
   /** PR only: head commit sha, used as the default ref for read tools */
   headRef?: string;
   /** PR only */
