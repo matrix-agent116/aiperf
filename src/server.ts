@@ -122,13 +122,41 @@ function renderReviewPage(p: PendingDecision): string {
         <button type="submit">提交采纳项到 GitHub</button>
       </form>`;
 
+  // Full diff, collapsed per file (files with review points open by default).
+  const withPoints = new Set(d.reviewPoints.map((rp) => rp.path));
+  const files = p.context?.files ?? [];
+  const diffSection = files.length
+    ? `<h2>改动 diff（按文件折叠）</h2>` +
+      files
+        .map((f) => {
+          const open = withPoints.has(f.path) ? "open" : "";
+          const tag = withPoints.has(f.path) ? " · 有审查意见" : "";
+          return `<details ${open}><summary>${esc(f.path)}${tag}</summary><pre class="code">${renderPatch(f.patch)}</pre></details>`;
+        })
+        .join("")
+    : "";
+
   return page(
     `Review ${p.owner}/${p.repo} #${p.number}`,
     `<h1>🔎 ${esc(p.owner)}/${esc(p.repo)} · PR #${p.number}</h1>
      <p class="meta"><a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">在 GitHub 打开</a> · 状态: ${esc(p.status)}</p>
      <h2>判断依据（置信度 ${Math.round(d.confidence * 100)}%）</h2><p>${esc(d.reasoning)}</p>
-     ${inner}`,
+     ${inner}
+     ${diffSection}`,
   );
+}
+
+/** Render a whole file patch with new-file line numbers and +/- coloring. */
+function renderPatch(patch: string): string {
+  return parsePatch(patch)
+    .map((l) => {
+      if (l.type === "hunk") return `<div class="dh">${esc(l.text)}</div>`;
+      const num = l.newLine != null ? String(l.newLine).padStart(5) : "     ";
+      const sign = l.type === "add" ? "+" : l.type === "del" ? "-" : " ";
+      const cls = l.type === "add" ? "da" : l.type === "del" ? "dd" : "";
+      return `<div class="${cls}">${esc(num)} ${esc(sign + l.text)}</div>`;
+    })
+    .join("");
 }
 
 /** A few lines of context around a target new-file line, with it highlighted. */
@@ -286,6 +314,9 @@ function page(title: string, inner: string): string {
   .sev-nit{background:#eef;color:#555} .sev-question{background:#fff5b1;color:#7a5b00}
   .warn{color:#b31d28;font-size:.8rem}
   pre.code{font-size:.85rem;padding:.5rem} pre.code .hl{background:#fff8c5}
+  details{border:1px solid #e1e4e8;border-radius:6px;margin:.5rem 0} details>summary{cursor:pointer;padding:.5rem .8rem;font-family:ui-monospace,monospace;font-size:.85rem;background:#f6f8fa}
+  details pre.code{margin:0;border:0;border-top:1px solid #e1e4e8;border-radius:0;max-height:70vh;overflow:auto}
+  .da{background:#e6ffec} .dd{background:#ffebe9} .dh{color:#8250df}
   button{font-size:1rem;padding:.5rem 1rem;border:0;border-radius:6px;background:#1f883d;color:#fff;cursor:pointer;margin-top:1rem}
   code{background:#eff1f3;padding:.05rem .3rem;border-radius:4px}
   textarea{width:100%;box-sizing:border-box;font:inherit;padding:.6rem;border:1px solid #e1e4e8;border-radius:6px;background:#f6f8fa;color:inherit}
@@ -294,6 +325,8 @@ function page(title: string, inner: string): string {
     h2,.meta,.ev{color:#8b949e} .en{color:#adbac7;border-color:#30363d} a{color:#58a6ff} code{background:#161b22}
     pre.code .hl{background:#3f2e00}
     .tabs button{background:#161b22;border-color:#30363d} .tabs button.active{background:#1f6feb;border-color:#1f6feb;color:#fff}
+    details,details>summary{border-color:#30363d} details>summary{background:#161b22} details pre.code{border-color:#30363d}
+    .da{background:#12261e} .dd{background:#25171c} .dh{color:#a371f7}
   }
 </style></head><body>${inner}
 <script>

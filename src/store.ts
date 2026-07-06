@@ -53,6 +53,12 @@ interface PendingRow {
   context_json: string | null;
 }
 
+// Columns for lookups that don't need the (potentially large) diff context — avoids
+// reading/parsing context_json on every background sweep. NULL AS context_json keeps
+// rowToPending happy (it maps to context: null).
+const COLS_NO_CTX =
+  "id, owner, repo, item_type, number, html_url, title, decision_json, draft_reply, chat_id, message_id, status, created_at, reminded_at, token, NULL AS context_json";
+
 /**
  * Persistence:
  *  - cursors: last poll timestamp per repo
@@ -222,7 +228,7 @@ export class Store {
   ): PendingDecision[] {
     const rows = this.db
       .prepare(
-        `SELECT * FROM pending
+        `SELECT ${COLS_NO_CTX} FROM pending
          WHERE owner = ? AND repo = ? AND item_type = ? AND number = ?
            AND id != ? AND status IN ('pending', 'awaiting_edit')`,
       )
@@ -238,7 +244,7 @@ export class Store {
   findDueReminders(beforeMs: number): PendingDecision[] {
     const rows = this.db
       .prepare(
-        `SELECT * FROM pending
+        `SELECT ${COLS_NO_CTX} FROM pending
          WHERE status IN ('pending', 'awaiting_edit')
            AND message_id IS NOT NULL
            AND COALESCE(reminded_at, created_at) < ?`,
@@ -257,7 +263,7 @@ export class Store {
   findAwaitingEdit(chatId: string): PendingDecision | null {
     const row = this.db
       .prepare(
-        "SELECT * FROM pending WHERE chat_id = ? AND status = 'awaiting_edit' ORDER BY created_at DESC LIMIT 1",
+        `SELECT ${COLS_NO_CTX} FROM pending WHERE chat_id = ? AND status = 'awaiting_edit' ORDER BY created_at DESC LIMIT 1`,
       )
       .get(chatId) as PendingRow | undefined;
     return row ? rowToPending(row) : null;

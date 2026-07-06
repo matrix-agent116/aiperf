@@ -39,6 +39,9 @@ async function pollCycle(
             decision,
             draftReply: decision.draftReply ?? null,
             chatId: app.telegram.chat_id,
+            // Persist the full changed-file diff for display on the review page.
+            // Background sweeps never read this column (see store COLS_NO_CTX),
+            // and the page renders it collapsed per file, so the size is fine.
             context:
               item.itemType === "pull_request" && item.files
                 ? { files: item.files }
