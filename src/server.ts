@@ -61,7 +61,7 @@ function serveReply(store: Store, id: string, res: ServerResponse): void {
   if (!p) return send(res, 404, page("未找到", "<p>该草稿不存在或已过期。</p>"));
   const typeLabel = p.itemType === "pull_request" ? "PR" : "Issue";
   const en = p.decision.draftReply?.trim() || "(no draft)";
-  const zh = p.decision.draftReplyZh?.trim() || "";
+  const zh = p.decision.draftReplyZh?.trim() || en; // fallback to EN on old cards
   send(
     res,
     200,
@@ -70,8 +70,9 @@ function serveReply(store: Store, id: string, res: ServerResponse): void {
       `<h1>${esc(p.owner)}/${esc(p.repo)} · ${typeLabel} #${p.number}</h1>
        <p class="meta"><a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">在 GitHub 打开</a> · 状态: ${esc(p.status)}</p>
        <h2>判断依据</h2><p>${esc(p.decision.reasoning)}</p>
-       ${zh ? `<h2>草稿回复（中文，仅供理解）</h2><pre>${esc(zh)}</pre>` : ""}
-       <h2>Draft reply (English — this is what gets posted)</h2><pre>${esc(en)}</pre>`,
+       ${LANG_TABS}
+       <div class="lang-zh"><h2>草稿回复（中文，仅供理解）</h2><pre>${esc(zh)}</pre></div>
+       <div class="lang-en"><h2>Draft reply (English — this is what gets posted)</h2><pre>${esc(en)}</pre></div>`,
     ),
   );
 }
@@ -96,8 +97,8 @@ function renderReviewPage(p: PendingDecision): string {
         <label><input type="checkbox" name="pt" value="${i}" checked ${done ? "disabled" : ""}>
           <span class="sev sev-${esc(pt.severity)}">${esc(pt.severity)}</span>
           <code>${loc}</code>${warn}</label>
-        ${pt.commentZh ? `<div class="cmt">${esc(pt.commentZh)}</div>` : ""}
-        <div class="en">EN (posted): ${esc(pt.comment)}</div>
+        <div class="cmt lang-zh">${esc(pt.commentZh || pt.comment)}</div>
+        <div class="en lang-en">${esc(pt.comment)}</div>
         ${pt.evidence ? `<div class="ev">依据：${esc(pt.evidence)}</div>` : ""}
         ${code ? `<pre class="code">${code}</pre>` : ""}
       </li>`;
@@ -105,18 +106,17 @@ function renderReviewPage(p: PendingDecision): string {
     .join("");
 
   const list = `<ul class="pts">${items || "<li>（无逐行意见，提交后仅发送总体意见正文）</li>"}</ul>`;
-  const zhBlock = overallZh
-    ? `<h2>总体意见（中文，仅供理解）</h2><pre>${esc(overallZh)}</pre>`
-    : "";
+  const zhBlock = `<div class="lang-zh"><h2>总体意见（中文，仅供理解）</h2><pre>${esc(overallZh || overallEn || "(none)")}</pre></div>`;
   const inner = done
-    ? `${zhBlock}
-       <h2>Review body (English — posted)</h2><pre>${esc(overallEn || "(none)")}</pre>
+    ? `${LANG_TABS}${zhBlock}
+       <div class="lang-en"><h2>Review body (English — posted)</h2><pre>${esc(overallEn || "(none)")}</pre></div>
        <h2>逐条审查意见</h2>${list}
        <p class="meta">该 PR 已处理（状态：${esc(p.status)}），无法再次提交。</p>`
-    : `${zhBlock}
+    : `${LANG_TABS}
        <form method="post" action="/review/${p.id}?t=${encodeURIComponent(p.token)}">
-        <h2>Review body (English — this is what gets posted, editable)</h2>
-        <textarea name="body" rows="6" placeholder="Leave empty to post no overall body">${esc(overallEn)}</textarea>
+        ${zhBlock}
+        <div class="lang-en"><h2>Review body (English — this is what gets posted, editable)</h2>
+          <textarea name="body" rows="6" placeholder="Leave empty to post no overall body">${esc(overallEn)}</textarea></div>
         <h2>逐条审查意见（勾选采纳，未勾选不提交）</h2>
         ${list}
         <button type="submit">提交采纳项到 GitHub</button>
@@ -260,14 +260,22 @@ function send(res: ServerResponse, status: number, html: string): void {
   res.end(html);
 }
 
+/** Global language-tab UI: default Chinese, click to reveal English blocks. */
+const LANG_TABS = `<div class="tabs"><button data-l="zh" class="active" onclick="setLang('zh')">中文</button><button data-l="en" onclick="setLang('en')">English</button></div>`;
+
 function page(title: string, inner: string): string {
-  return `<!doctype html><html lang="zh"><head><meta charset="utf-8">
+  return `<!doctype html><html lang="zh" data-lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)}</title>
 <style>
   body{font:16px/1.6 -apple-system,system-ui,sans-serif;max-width:820px;margin:2rem auto;padding:0 1rem;color:#1a1a1a}
   h1{font-size:1.25rem} h2{font-size:1rem;color:#555;margin-top:1.5rem}
   .meta{color:#666;font-size:.9rem}
+  .tabs{display:flex;gap:.5rem;margin:1rem 0}
+  .tabs button{font-size:.9rem;margin:0;padding:.3rem .9rem;border:1px solid #d0d7de;border-radius:6px;background:#f6f8fa;color:inherit;cursor:pointer}
+  .tabs button.active{background:#0969da;border-color:#0969da;color:#fff}
+  [data-lang="zh"] .lang-en{display:none}
+  [data-lang="en"] .lang-zh{display:none}
   pre{white-space:pre-wrap;word-wrap:break-word;background:#f6f8fa;border:1px solid #e1e4e8;border-radius:6px;padding:1rem}
   a{color:#0969da}
   ul.pts{list-style:none;padding:0} li.pt{border:1px solid #e1e4e8;border-radius:8px;padding:.75rem 1rem;margin:.75rem 0}
@@ -285,8 +293,13 @@ function page(title: string, inner: string): string {
     body{background:#0d1117;color:#c9d1d9} pre,li.pt,textarea{background:#161b22;border-color:#30363d}
     h2,.meta,.ev{color:#8b949e} .en{color:#adbac7;border-color:#30363d} a{color:#58a6ff} code{background:#161b22}
     pre.code .hl{background:#3f2e00}
+    .tabs button{background:#161b22;border-color:#30363d} .tabs button.active{background:#1f6feb;border-color:#1f6feb;color:#fff}
   }
-</style></head><body>${inner}</body></html>`;
+</style></head><body>${inner}
+<script>
+function setLang(l){document.documentElement.dataset.lang=l;
+  for(var b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.l===l);}
+</script></body></html>`;
 }
 
 function esc(s: string): string {
