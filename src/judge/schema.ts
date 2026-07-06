@@ -65,3 +65,45 @@ export const DecisionSchema = z
   });
 
 export type Decision = z.infer<typeof DecisionSchema>;
+
+/**
+ * JSON Schema handed to the Agent SDK's `outputFormat` so the model is forced to
+ * emit an object of this shape. It mirrors DecisionSchema's *shape* only — the
+ * cross-field rules (needsReply⇒draftReply, add_labels⇒labels) and the 0-1
+ * confidence bound are still enforced by DecisionSchema.safeParse afterwards, so
+ * keep this in sync with the zod schema above when either changes.
+ */
+export const DecisionJsonSchema: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  required: ["itemType", "needsReply", "reasoning", "confidence"],
+  properties: {
+    itemType: { type: "string", enum: ["issue", "pull_request"] },
+    needsReply: { type: "boolean" },
+    draftReply: { type: "string" },
+    draftReplyZh: { type: "string" },
+    reviewPoints: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["path", "line", "comment"],
+        properties: {
+          path: { type: "string" },
+          line: { type: ["integer", "null"] },
+          severity: {
+            type: "string",
+            enum: ["blocker", "suggestion", "nit", "question"],
+          },
+          comment: { type: "string" },
+          commentZh: { type: "string" },
+          evidence: { type: "string" },
+        },
+      },
+    },
+    suggestedAction: { type: "string", enum: ActionEnum.options },
+    labels: { type: "array", items: { type: "string" } },
+    reasoning: { type: "string" },
+    confidence: { type: "number", minimum: 0, maximum: 1 },
+  },
+};

@@ -6,6 +6,7 @@ export const TOOL_SERVER = "github_ro";
 export const TOOL_NAMES = [
   `mcp__${TOOL_SERVER}__get_file`,
   `mcp__${TOOL_SERVER}__get_issue`,
+  `mcp__${TOOL_SERVER}__search_code`,
 ];
 
 const MAX_FILE = 30000;
@@ -76,10 +77,44 @@ export function buildGithubReadTools(
     },
   );
 
+  const searchCode = tool(
+    "search_code",
+    "Search this repo's code for a string or symbol (e.g. a function/class name) to find its definition and callers before judging a change. Searches the default branch's indexed code. Returns matching file paths with snippets — follow up with get_file to read full context.",
+    { query: z.string() },
+    async ({ query: q }) => {
+      console.log(`[judge] search_code ${owner}/${repo} ${q}`);
+      try {
+        const { data } = await getOctokit().rest.search.code({
+          q: `${q} repo:${owner}/${repo}`,
+          per_page: 15,
+          headers: { accept: "application/vnd.github.text-match+json" },
+        });
+        if (!data.items.length) {
+          return text(`No code matches for "${q}" in ${owner}/${repo} (default branch).`);
+        }
+        const out = data.items
+          .map((it) => {
+            const frags = ((it as { text_matches?: { fragment?: string }[] }).text_matches ?? [])
+              .map((m) => m.fragment?.trim())
+              .filter(Boolean)
+              .slice(0, 2)
+              .join("\n  …\n");
+            return `• ${it.path}${frags ? `\n${clip(frags, 500)}` : ""}`;
+          })
+          .join("\n\n");
+        return text(
+          `Code matches for "${q}" (${data.total_count} total, showing ${data.items.length}):\n\n${out}`,
+        );
+      } catch (e) {
+        return text(`ERROR searching "${q}": ${(e as Error).message}`);
+      }
+    },
+  );
+
   const server = createSdkMcpServer({
     name: TOOL_SERVER,
     version: "1.0.0",
-    tools: [getFile, getIssue],
+    tools: [getFile, getIssue, searchCode],
   });
 
   return { server, allowedTools: TOOL_NAMES };

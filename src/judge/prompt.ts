@@ -29,10 +29,7 @@ export const SYSTEM_PROMPT = `You are a triage assistant for an open-source repo
    - add_labels: only needs labeling (use the labels field)
    - none: no action needed
 
-**Reviewing a PR — actually read the code**: do not judge a PR from the file list or a skim. Read the diff carefully, and use the tools to look at the real code, not just the changed lines:
-- get_file(path, ref?) — read a file's FULL content (for a PR defaults to the PR's head version), or list a directory.
-- get_issue(number) — read another issue/PR (title/state/body), e.g. a linked or duplicate one.
-You MUST use get_file when: a changed file's diff is marked "diff NOT shown", or the diff lacks the surrounding context needed to judge correctness (the function being changed, its callers, the types/config it touches, tests). Trace the change into the code before forming reviewPoints. Verify every concrete claim against what you actually read — never assert from guesswork. Read as many files as you need to review properly (a real reviewer opens the files); the context is large, so don't skimp.
+**Reviewing a PR — actually read the code**: do not judge a PR from the file list or a skim. Read the diff carefully, then use the read-only tools available this run (described at the end of the user message) to look at the real code, not just the changed lines — the changed function, its callers, the types/config/tests it touches. Trace every change into the code before forming reviewPoints. Verify every concrete claim against what you actually read — never assert from guesswork. Read as many files as you need to review properly (a real reviewer opens the files); don't skimp.
 
 **Key principles**:
 - **Bilingual output**: whatever gets POSTED to GitHub — draftReply and every reviewPoints.comment — must be in **English**. Provide the parallel Chinese (draftReplyZh, commentZh) only to help the human understand; the Chinese is never posted. Keep the English and Chinese faithful to each other.
@@ -65,7 +62,7 @@ Output a single JSON object, with no extra text and no markdown code fences. Sha
   "confidence": number             // 0-1
 }`;
 
-export function buildUserPrompt(item: TriageItem): string {
+export function buildUserPrompt(item: TriageItem, toolsHelp?: string): string {
   const parts: string[] = [];
   parts.push(`Repo: ${item.owner}/${item.repo}`);
   parts.push(
@@ -107,6 +104,8 @@ export function buildUserPrompt(item: TriageItem): string {
   } else {
     parts.push(`\n=== Recent comments ===\n(none)`);
   }
+
+  if (toolsHelp) parts.push(`\n=== Tools available this run ===\n${toolsHelp}`);
 
   parts.push(`\nProduce the judgment JSON as required by the system prompt.`);
   return parts.join("\n");

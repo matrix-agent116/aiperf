@@ -1,7 +1,7 @@
 import type { AppConfig, RepoConfig } from "../config.ts";
 import type { Store } from "../store.ts";
 import { itemKey, type TriageItem } from "../types.ts";
-import { getOctokit } from "./client.ts";
+import { getOctokit, getSelfLogin } from "./client.ts";
 
 const MAX_BODY = 8000;
 const MAX_COMMENTS = 10;
@@ -27,6 +27,10 @@ export async function pollRepo(
 ): Promise<{ items: TriageItem[]; maxSeen: string }> {
   const gh = getOctokit();
   const repoKey = `${rc.owner}/${rc.repo}`;
+
+  // Our own login: when the last activity on an item is us (a reply/action this agent
+  // posted through GITHUB_TOKEN), that self-bump must not re-trigger processing.
+  const self = await getSelfLogin();
 
   const cursor = store.getCursor(repoKey);
   const since =
@@ -82,6 +86,23 @@ export async function pollRepo(
 
       const comments = await fetchRecentComments(rc, issue.number);
 
+      // Skip items whose latest activity is our own reply/action — otherwise the
+      // updated_at bump from posting through GITHUB_TOKEN re-triggers this same item
+      // next cycle (duplicate cards / a self-reply loop). A newer comment/review by
+      // someone else, or a newer commit on a PR, still counts as real new activity.
+      if (
+        self &&
+        (await lastActorIsSelf(
+          rc,
+          { number: issue.number, openedBy: author, createdAt: issue.created_at },
+          isPR,
+          comments,
+          self,
+        ))
+      ) {
+        continue;
+      }
+
       const base: TriageItem = {
         owner: rc.owner,
         repo: rc.repo,
@@ -130,6 +151,85 @@ async function fetchRecentComments(rc: RepoConfig, number: number) {
       body: truncate(c.body ?? "", 1500),
       createdAt: c.created_at,
     }));
+}
+
+/**
+ * True when the most recent activity on the item was performed by `self` (the
+ * GITHUB_TOKEN user) — i.e. the update was our own reply/review/action, not something
+ * new to respond to. Looks at the newest comment, and for a PR also the newest review
+ * and newest commit: a commit newer than our last reply is real new work, so we never
+ * skip in that case regardless of who pushed it.
+ */
+async function lastActorIsSelf(
+  rc: RepoConfig,
+  issue: { number: number; openedBy: string; createdAt: string },
+  isPR: boolean,
+  comments: { author: string; createdAt: string }[],
+  self: string,
+): Promise<boolean> {
+  const newest = comments[comments.length - 1];
+  let actor = newest ? newest.author : issue.openedBy;
+  let at = newest ? newest.createdAt : issue.createdAt;
+
+  if (isPR) {
+    const review = await fetchLatestReview(rc, issue.number);
+    if (review && review.submittedAt >= at) {
+      actor = review.author;
+      at = review.submittedAt;
+    }
+    const commitAt = await fetchLatestCommitDate(rc, issue.number);
+    // A commit pushed after our last reply is new code to (re)review — don't skip.
+    if (commitAt && commitAt > at) return false;
+  }
+
+  return actor === self;
+}
+
+async function fetchLatestReview(
+  rc: RepoConfig,
+  number: number,
+): Promise<{ author: string; submittedAt: string } | null> {
+  const gh = getOctokit();
+  try {
+    const reviews = await gh.paginate(gh.rest.pulls.listReviews, {
+      owner: rc.owner,
+      repo: rc.repo,
+      pull_number: number,
+      per_page: 100,
+    });
+    let latest: { author: string; submittedAt: string } | null = null;
+    for (const r of reviews) {
+      if (!r.submitted_at) continue;
+      if (!latest || r.submitted_at > latest.submittedAt) {
+        latest = { author: r.user?.login ?? "", submittedAt: r.submitted_at };
+      }
+    }
+    return latest;
+  } catch (e) {
+    console.warn(`[poll] failed to list reviews for #${number}:`, (e as Error).message);
+    return null;
+  }
+}
+
+async function fetchLatestCommitDate(rc: RepoConfig, number: number): Promise<string | null> {
+  const gh = getOctokit();
+  try {
+    const commits = await gh.paginate(gh.rest.pulls.listCommits, {
+      owner: rc.owner,
+      repo: rc.repo,
+      pull_number: number,
+      per_page: 100,
+    });
+    let latest: string | null = null;
+    for (const c of commits) {
+      const at = c.commit?.committer?.date ?? c.commit?.author?.date;
+      if (at && (!latest || at > latest)) latest = at;
+    }
+    return latest;
+  } catch (e) {
+    console.warn(`[poll] failed to list commits for #${number}:`, (e as Error).message);
+    return null;
+  }
 }
 
 async function fetchPrDetails(
