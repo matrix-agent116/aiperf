@@ -2,6 +2,9 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { TriageItem } from "../types.ts";
 import { DecisionSchema, type Decision } from "./schema.ts";
 import { SYSTEM_PROMPT, buildUserPrompt } from "./prompt.ts";
+import { buildGithubReadTools, TOOL_SERVER } from "./tools.ts";
+
+type ReadTools = ReturnType<typeof buildGithubReadTools>;
 
 /**
  * Judge a TriageItem via the Claude Agent SDK, returning a zod-validated Decision.
@@ -10,6 +13,9 @@ import { SYSTEM_PROMPT, buildUserPrompt } from "./prompt.ts";
  */
 export async function judge(item: TriageItem, model: string): Promise<Decision> {
   const userPrompt = buildUserPrompt(item);
+  // Read-only tools scoped to this item's repo, so the model can inspect code
+  // beyond the diff on demand (whole file, callers, linked issues).
+  const tools = buildGithubReadTools(item.owner, item.repo, item.headRef);
   let lastText = "";
   let lastError = "";
 
@@ -19,7 +25,7 @@ export async function judge(item: TriageItem, model: string): Promise<Decision> 
         ? userPrompt
         : `${userPrompt}\n\n[previous output could not be parsed]: ${lastError}\nOutput exactly one valid JSON object, with no extra text and no code fences.`;
 
-    lastText = await runQuery(prompt, model);
+    lastText = await runQuery(prompt, model, tools);
     const json = extractJson(lastText);
     if (json === undefined) {
       lastError = "no JSON object found";
@@ -42,16 +48,22 @@ export async function judge(item: TriageItem, model: string): Promise<Decision> 
   );
 }
 
-async function runQuery(prompt: string, model: string): Promise<string> {
+async function runQuery(
+  prompt: string,
+  model: string,
+  tools: ReadTools,
+): Promise<string> {
   let result = "";
   for await (const msg of query({
     prompt,
     options: {
       model,
       systemPrompt: SYSTEM_PROMPT,
-      allowedTools: [],
+      mcpServers: { [TOOL_SERVER]: tools.server },
+      allowedTools: tools.allowedTools,
       permissionMode: "bypassPermissions",
-      maxTurns: 1,
+      allowDangerouslySkipPermissions: true,
+      maxTurns: 8, // allow a few tool calls before the final answer
     },
   })) {
     if (msg.type === "result" && msg.subtype === "success") {

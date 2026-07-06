@@ -17,6 +17,8 @@ export interface TriageItem {
   diffSummary?: string;
   /** PR only: per-file patches, used to anchor review points and render code on the page */
   files?: { path: string; patch: string }[];
+  /** PR only: head commit sha, used as the default ref for read tools */
+  headRef?: string;
   /** PR only */
   isDraft?: boolean;
 }

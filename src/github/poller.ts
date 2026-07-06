@@ -169,6 +169,7 @@ async function fetchPrDetails(
     isDraft: pr.data.draft ?? false,
     diffSummary: `${header}\n${fileLines}\n${patch}`.trim(),
     files: structured,
+    headRef: pr.data.head.sha,
   };
 }
 
