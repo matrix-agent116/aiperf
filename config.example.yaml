@@ -1,0 +1,35 @@
+# Poll interval (minutes)
+poll_interval_minutes: 5
+
+# Claude model used for judging
+model: claude-opus-4-8
+
+telegram:
+  # Target chat (personal or group). Find your chat_id via @userinfobot
+  chat_id: "123456789"
+
+# Draft replies are shown on a web page served by this service, not embedded in
+# Telegram — the card carries only a link.
+# port: listen port. base_url: externally reachable address used to build links
+# (must be reachable from wherever you open Telegram: a LAN IP, or a public
+# domain / tunnel). If base_url is omitted it defaults to http://localhost:<port>.
+http:
+  port: 8787
+  base_url: "http://localhost:8787"
+
+# On the first poll of each repo, only look at issues/PRs updated within this many
+# days (avoids pulling the entire history on startup).
+lookback_days_on_first_run: 7
+
+# While a card is still un-actioned, send a Telegram reminder every this many hours
+# until it is handled. Set to 0 to disable reminders.
+reminder_after_hours: 24
+
+repos:
+  - url: https://github.com/owner/repo
+    watch: [issues, pulls] # watch issues / pulls; you may pick just one
+    only_from_others: true # only items from non-maintainers/collaborators (default true)
+    ignore_authors: [] # extra author logins to ignore (e.g. your own bot account)
+
+  # - url: https://github.com/owner/another-repo
+  #   watch: [issues]
