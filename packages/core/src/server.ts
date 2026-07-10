@@ -20,7 +20,6 @@ const CARD_ACTION_RE = /^\/card\/([A-Za-z0-9_-]+)\/(reply|act|ignore)\/?$/;
  *  - GET  /setup               first-run wizard: step 1 model, step 2 GitHub (no repos)
  *  - GET  /inbox?view=open|done&repo=owner/repo   folder views
  *  - GET  /logs                recent runtime log lines (in-memory ring buffer)
- *  - POST /repos/add|remove    add/remove a watched repo from the Inbox page
  *  - POST /card/<id>/<action>  reply (with optional edited text) / act / ignore
  *  - GET  /reply/<id>          issue draft preview (read-only)
  *  - GET  /review/<id>?t=tok   PR review page: per-point checklist + code
@@ -81,16 +80,6 @@ export function startHttpServer(
           return res.end();
         }
         return send(res, 200, renderSetupWizard());
-      }
-
-      if (req.method === "POST" && (path === "/repos/add" || path === "/repos/remove")) {
-        return handleRepoMutation(
-          store,
-          path === "/repos/add" ? "add" : "remove",
-          req,
-          res,
-          hooks?.onSettingsChanged,
-        );
       }
 
       if (path === "/settings") {
@@ -289,41 +278,15 @@ function renderInbox(store: Store, view: "open" | "done", repoFilter?: string): 
   const open = store.listOpen().filter(inRepo);
   const cards = open.map(renderInboxCard).join("");
 
-  const watched = watchedRepoKeys(store);
-  const rawRepos = ((store.getSettingsRaw() ?? {}) as Record<string, any>).repos ?? [];
-  const repoRows = (Array.isArray(rawRepos) ? rawRepos : [])
-    .map((r: any) => {
-      const watch: string[] = Array.isArray(r.watch) ? r.watch : ["issues", "pulls"];
-      return `<li class="hist"><code>${esc(String(r.url ?? "").replace(/^https?:\/\/(www\.)?github\.com\//i, ""))}</code>
-        <span class="chip">${watch.includes("issues") ? "Issues" : ""}${watch.length === 2 ? " + " : ""}${watch.includes("pulls") ? "PRs" : ""}</span>
-        <form method="post" action="/repos/remove" class="inline">
-          <input type="hidden" name="url" value="${esc(String(r.url ?? ""))}">
-          <button class="ghost" title="停止监控该仓库" aria-label="停止监控该仓库">${icon("x", 13)}</button>
-        </form></li>`;
-    })
-    .join("");
-  // Repo management lives on the all-pending view only (folder root, mail-style).
-  const repoSection = repoFilter
-    ? ""
-    : `<h2>${icon("repo", 13)} 监控的仓库（${watched.length}）</h2>
-     <div class="panel">
-       ${repoRows ? `<ul class="histlist">${repoRows}</ul>` : ""}
-       <form method="post" action="/repos/add" class="addrepo">
-         <input type="text" name="url" placeholder="https://github.com/owner/repo" required>
-         <button>${icon("plus", 14)} 添加仓库</button>
-       </form>
-       <p class="meta" style="margin:.3rem 0 0">高级选项（只看他人 / 忽略作者 / 只看 Issues 或 PRs）在<a href="/settings">设置</a>里调整。</p>
-     </div>`;
-
-  const emptyState = watched.length
+  // Repo management lives on the settings page; the inbox only shows cards.
+  const emptyState = watchedRepoKeys(store).length
     ? `<div class="empty"><span class="big">${icon("inbox", 36)}</span>没有待处理的卡片<br><span class="meta">轮询每隔几分钟运行一次，新的判定会自动出现在这里</span></div>`
-    : `<div class="empty"><span class="big">${icon("repo", 36)}</span>还没有监控任何仓库<br><span class="meta">在下方添加一个 GitHub 仓库，轮询就会开始</span></div>`;
+    : `<div class="empty"><span class="big">${icon("repo", 36)}</span>还没有监控任何仓库<br><span class="meta">到<a href="/settings">设置</a>里添加一个 GitHub 仓库，轮询就会开始</span></div>`;
 
   return page(
     `Inbox (${open.length})`,
     `<h1>待处理${suffix}${open.length ? `<span class="count">${open.length}</span>` : ""}</h1>
-     ${cards || emptyState}
-     ${repoSection}`,
+     ${cards || emptyState}`,
     { refreshSeconds: 60, side },
   );
 }
@@ -358,7 +321,7 @@ function renderSetupWizard(): string {
      <div class="whead">
        <span class="logo mark">${icon("pr", 26)}</span>
        <h1>欢迎使用 GH Triage</h1>
-       <p class="meta">两步完成初始设置。仓库不在这里添加 —— 完成后在 Inbox 主界面随时添加。</p>
+       <p class="meta">两步完成初始设置。仓库不在这里添加 —— 完成后在「设置」里随时添加。</p>
      </div>
 
      <div class="steps">
@@ -420,54 +383,6 @@ function renderSetupWizard(): string {
      }
      </script>`,
   );
-}
-
-/** Add/remove a watched repo from the Inbox page; saves settings and hot-applies. */
-async function handleRepoMutation(
-  store: Store,
-  action: "add" | "remove",
-  req: IncomingMessage,
-  res: ServerResponse,
-  onSettingsChanged?: (config: AppConfig) => void,
-): Promise<void> {
-  const stored = store.getSettingsRaw();
-  if (!stored) {
-    res.writeHead(302, { location: "/setup" });
-    res.end();
-    return;
-  }
-  const form = new URLSearchParams(await readBody(req));
-  const url = (form.get("url") ?? "").trim();
-  if (!url) {
-    return send(res, 400, page("无效输入", `<p>仓库 URL 不能为空。</p><p><a href="/inbox">← 返回 Inbox</a></p>`));
-  }
-
-  const norm = (u: string): string =>
-    u.replace(/\/+$/, "").replace(/\.git$/, "").toLowerCase();
-  const doc = stored as Record<string, any>;
-  const current: any[] = Array.isArray(doc.repos) ? doc.repos : [];
-  const repos =
-    action === "add"
-      ? current.some((r) => norm(String(r?.url ?? "")) === norm(url))
-        ? current // already watched — saving again is a harmless no-op
-        : [...current, { url, watch: ["issues", "pulls"], only_from_others: true, ignore_authors: [] }]
-      : current.filter((r) => norm(String(r?.url ?? "")) !== norm(url));
-
-  const parsed = parseSettings({ ...doc, repos });
-  if (!parsed.ok) {
-    return send(
-      res,
-      422,
-      page("保存失败", `<h1>❌ 保存失败</h1><p>${esc(parsed.error)}</p><p><a href="/inbox">← 返回 Inbox</a></p>`),
-    );
-  }
-  store.saveSettingsRaw(parsed.settings);
-  // Hot-apply: the hook restarts the engine timer, which immediately runs a cycle —
-  // a newly added repo shows up without waiting for the next interval.
-  onSettingsChanged?.(parsed.config);
-  console.log(`[settings] repo ${action}: ${url}`);
-  res.writeHead(303, { location: "/inbox" });
-  res.end();
 }
 
 // ---- settings panel ----
@@ -1130,9 +1045,6 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
   .repo input[type=text]{width:auto}
   .repo .r-url{flex:2;min-width:14rem} .repo .r-ignore{flex:1;min-width:8rem}
   .repo label{font-size:.85rem;color:var(--muted);white-space:nowrap}
-  .addrepo{display:flex;gap:.6rem;align-items:center;margin:.7rem 0 .2rem}
-  .addrepo input{flex:1;width:auto;min-width:10rem}
-  .addrepo button{white-space:nowrap}
 
   /* lists */
   ul.histlist{list-style:none;padding:0;margin:0}
