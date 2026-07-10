@@ -82,6 +82,12 @@ export const RepoAnalysisSchema = z
   });
 export type RepoAnalysis = z.infer<typeof RepoAnalysisSchema>;
 
+/** What actually gets stored/rendered: the analysis plus the analyzed commit. */
+export type RepoAnalysisResult = RepoAnalysis & {
+  commitSha: string;
+  commitTimeMs: number;
+};
+
 /** JSON Schema mirror of RepoAnalysisSchema for the SDK's outputFormat — keep in sync. */
 const RepoAnalysisJsonSchema: Record<string, unknown> = {
   type: "object",
@@ -154,11 +160,12 @@ export async function analyzeRepo(
   owner: string,
   repo: string,
   model: string,
-): Promise<RepoAnalysis> {
-  const cwd = await prepareRepoCheckout(owner, repo);
-  if (!cwd) {
+): Promise<RepoAnalysisResult> {
+  const checkout = await prepareRepoCheckout(owner, repo);
+  if (!checkout) {
     throw new Error("无法检出仓库代码（git 不可用或无访问权限）");
   }
+  const cwd = checkout.dir;
 
   let lastError = "";
   let lastText = "";
@@ -201,7 +208,9 @@ export async function analyzeRepo(
       continue;
     }
     const parsed = RepoAnalysisSchema.safeParse(raw);
-    if (parsed.success) return parsed.data;
+    if (parsed.success) {
+      return { ...parsed.data, commitSha: checkout.sha, commitTimeMs: checkout.commitTimeMs };
+    }
     lastError = parsed.error.issues
       .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
       .join("; ");

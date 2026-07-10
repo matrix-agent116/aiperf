@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { gzipSync } from "node:zlib";
 import { recentLogs } from "./log.ts";
-import type { Store, PendingDecision, RepoAnalysisRecord } from "./store.ts";
+import type { Store, PendingDecision } from "./store.ts";
 import type { TriageEngine } from "./engine.ts";
 import type { SuggestedAction } from "./judge/schema.ts";
 import type { RepoAnalysis, RepoComponent, RepoFinding } from "./judge/repo-analysis.ts";
@@ -116,12 +116,12 @@ const EN: Record<string, string> = {
   "重新生成分析": "Regenerate analysis",
   "分析进行中…": "Analyzing…",
   "尚未生成分析": "No analysis yet",
-  "由 AI 阅读整个仓库的代码，产出系统架构导图与安全漏洞扫描（只读，不会执行仓库代码）":
-    "AI reads the whole repository and produces an architecture map plus a security scan (read-only; the repo's code is never executed)",
+  "由 AI 阅读整个仓库的代码，产出系统架构与安全漏洞扫描（只读，不会执行仓库代码）":
+    "AI reads the whole repository and produces an architecture overview plus a security scan (read-only; the repo's code is never executed)",
   "分析进行中，AI 正在阅读代码…": "Analysis in progress — AI is reading the code…",
   "页面会自动刷新，通常需要几分钟": "This page refreshes automatically; a run typically takes a few minutes",
   "分析失败": "Analysis failed",
-  "系统架构导图": "Architecture map",
+  "系统架构": "Architecture",
   "安全漏洞扫描": "Security scan",
   "未发现明显安全问题": "No obvious security issues found",
   "更新于": "Updated",
@@ -505,6 +505,13 @@ function renderInbox(store: Store, view: "open" | "done", repoFilter?: string): 
 const SEV_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 const SEV_ZH: Record<string, string> = { critical: "严重", high: "高危", medium: "中危", low: "低危" };
 
+/** Legacy analyses were stored before the commit fields existed. */
+type StoredAnalysis = RepoAnalysis & { commitSha?: string; commitTimeMs?: number };
+
+function fmtWhen(ms: number): string {
+  return new Date(ms).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
 function renderRepoPage(store: Store, owner: string, repo: string): string {
   const key = `${owner}/${repo}`;
   const side = renderSidebar(store, { view: "repo", repo: key });
@@ -518,36 +525,49 @@ function renderRepoPage(store: Store, owner: string, repo: string): string {
       }</button></form>`;
   const when =
     rec && !running
-      ? `<span class="meta">${t("更新于")} ${new Date(rec.updatedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>`
+      ? `<span class="meta">${t("更新于")} ${fmtWhen(rec.updatedAt)}</span>`
       : "";
 
   let body: string;
+  let commitChip = "";
   if (!rec) {
     body = `<div class="empty"><span class="big">${icon("repo", 36)}</span>${t("尚未生成分析")}<br>
-      <span class="meta">${t("由 AI 阅读整个仓库的代码，产出系统架构导图与安全漏洞扫描（只读，不会执行仓库代码）")}</span></div>`;
+      <span class="meta">${t("由 AI 阅读整个仓库的代码，产出系统架构与安全漏洞扫描（只读，不会执行仓库代码）")}</span></div>`;
   } else if (running) {
     body = `<div class="empty"><span class="big">${icon("clock", 36)}</span>${t("分析进行中，AI 正在阅读代码…")}<br>
       <span class="meta">${t("页面会自动刷新，通常需要几分钟")}</span></div>`;
   } else if (rec.status === "error") {
     body = `<div class="panel"><p class="warn">${t("分析失败")}：${esc(rec.error ?? "")}</p></div>`;
   } else {
-    body = renderAnalysis(rec);
+    let a: StoredAnalysis | null = null;
+    try {
+      a = JSON.parse(rec.json ?? "") as StoredAnalysis;
+    } catch {
+      /* fall through to the error panel below */
+    }
+    if (!a) {
+      body = `<div class="panel"><p class="warn">${t("分析失败")}：invalid stored JSON</p></div>`;
+    } else {
+      body = renderAnalysis(a);
+      if (a.commitSha) {
+        // Which code was analyzed: head SHA (links to GitHub) + its commit time.
+        commitChip = `<span class="meta">commit
+          <a href="https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commit/${esc(a.commitSha)}"
+             target="_blank" rel="noopener"><code>${esc(a.commitSha.slice(0, 7))}</code></a>${
+               a.commitTimeMs ? `（${fmtWhen(a.commitTimeMs)}）` : ""
+             }</span>`;
+      }
+    }
   }
 
   return page(
     key,
-    `<div class="repohead"><h1>${esc(key)}</h1>${btn}${when}</div>${body}`,
+    `<div class="repohead"><h1>${esc(key)}</h1>${btn}${when}${commitChip}</div>${body}`,
     { side, wide: true, refreshSeconds: running ? 8 : undefined },
   );
 }
 
-function renderAnalysis(rec: RepoAnalysisRecord): string {
-  let a: RepoAnalysis;
-  try {
-    a = JSON.parse(rec.json ?? "") as RepoAnalysis;
-  } catch {
-    return `<div class="panel"><p class="warn">${t("分析失败")}：invalid stored JSON</p></div>`;
-  }
+function renderAnalysis(a: StoredAnalysis): string {
 
   // Architecture: components grouped into layers, dependencies as chips.
   const groups = new Map<string, RepoComponent[]>();
@@ -593,11 +613,18 @@ function renderAnalysis(rec: RepoAnalysisRecord): string {
     ? `<ul class="findings">${findings.map(findingLi).join("")}</ul>`
     : `<div class="empty"><span class="big">${icon("done", 36)}</span>${t("未发现明显安全问题")}</div>`;
 
-  return `<h2>${t("系统架构导图")}</h2>
-    <div class="panel"><p class="archoverview">${esc(displayText(a.overviewZh, a.overview))}</p>
-    <div class="archmap">${archRows}</div></div>
-    <h2>${t("安全漏洞扫描")}${findings.length ? `<span class="count">${findings.length}</span>` : ""}</h2>
-    ${security}`;
+  // Two tabs; security scan is the default view.
+  return `<div class="rviews" data-rview="sec">
+    <div class="tabs rtabs">
+      <button data-v="sec" class="active" onclick="setRepoView('sec')">${t("安全漏洞扫描")}${findings.length ? ` (${findings.length})` : ""}</button>
+      <button data-v="arch" onclick="setRepoView('arch')">${t("系统架构")}</button>
+    </div>
+    <div class="rv rv-sec">${security}</div>
+    <div class="rv rv-arch">
+      <div class="panel"><p class="archoverview">${esc(displayText(a.overviewZh, a.overview))}</p>
+      <div class="archmap">${archRows}</div></div>
+    </div>
+  </div>`;
 }
 
 // ---- logs page ----
@@ -1494,6 +1521,9 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
   .tabs button.active{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
   [data-lang="zh"] .lang-en{display:none}
   [data-lang="en"] .lang-zh{display:none}
+  .rtabs{margin:.2rem 0 1rem}
+  [data-rview="sec"] .rv-arch{display:none}
+  [data-rview="arch"] .rv-sec{display:none}
   .en{margin:.3rem 0;font-size:.9rem;color:var(--muted);border-left:3px solid var(--border);padding-left:.6rem}
 
   /* review points & diffs */
@@ -1539,6 +1569,9 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
 <script>
 function setLang(l){document.documentElement.dataset.lang=l;
   for(var b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.l===l);}
+function setRepoView(v){var w=document.querySelector('.rviews');if(!w)return;
+  w.dataset.rview=v;
+  for(var b of document.querySelectorAll('.rtabs button')) b.classList.toggle('active', b.dataset.v===v);}
 // Materialize a file's deferred diff the first time its <details> is opened. The
 // toggle event doesn't bubble, so listen in the capture phase.
 document.addEventListener('toggle',function(e){

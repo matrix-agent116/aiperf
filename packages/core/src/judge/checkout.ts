@@ -54,15 +54,24 @@ export async function preparePrCheckout(item: TriageItem): Promise<string | null
   }
 }
 
+export interface RepoCheckout {
+  dir: string;
+  /** Full SHA of the checked-out default-branch head */
+  sha: string;
+  /** Commit (committer) time of that head, ms since epoch */
+  commitTimeMs: number;
+}
+
 /**
  * A shallow checkout of the repo's DEFAULT branch (whatever HEAD points at) for
  * whole-repo analysis. Lives in its own directory so it never races a concurrent
  * PR-head checkout of the same repo (those reset the working tree per PR).
+ * Always re-fetches, so the analysis runs against the repo's current head.
  */
 export async function prepareRepoCheckout(
   owner: string,
   repo: string,
-): Promise<string | null> {
+): Promise<RepoCheckout | null> {
   const dir = resolve(join(REPOS_DIR, `${owner}__${repo}__default`));
   try {
     await mkdir(dir, { recursive: true });
@@ -80,8 +89,10 @@ export async function prepareRepoCheckout(
     ]);
     await git(dir, ["reset", "--hard", "-q", "FETCH_HEAD"]);
     await git(dir, ["clean", "-qdff"]);
-    console.log(`[analysis] checkout ${owner}/${repo}@HEAD -> ${dir}`);
-    return dir;
+    const head = (await gitOut(dir, ["log", "-1", "--format=%H|%ct"])).trim();
+    const [sha, ct] = head.split("|");
+    console.log(`[analysis] checkout ${owner}/${repo}@${sha.slice(0, 8)} -> ${dir}`);
+    return { dir, sha, commitTimeMs: Number(ct) * 1000 };
   } catch (e) {
     console.warn(
       `[analysis] checkout failed for ${owner}/${repo}: ${(e as Error).message}`,
@@ -99,6 +110,14 @@ async function git(dir: string, args: string[]): Promise<void> {
     timeout: GIT_TIMEOUT,
     maxBuffer: 32 * 1024 * 1024,
   });
+}
+
+async function gitOut(dir: string, args: string[]): Promise<string> {
+  const { stdout } = await pexec("git", ["-C", dir, ...args], {
+    timeout: GIT_TIMEOUT,
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  return stdout;
 }
 
 async function exists(path: string): Promise<boolean> {
