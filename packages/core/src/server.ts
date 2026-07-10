@@ -7,6 +7,7 @@ import type { SuggestedAction } from "./judge/schema.ts";
 import type { RepoAnalysis, RepoComponent, RepoFinding } from "./judge/repo-analysis.ts";
 import { parseSettings, type AppConfig } from "./config.ts";
 import { parsePatch, commentableLines, type DiffLine } from "./diff.ts";
+import { mdToHtml, clipMd } from "./md.ts";
 import { submitPrReview, type InlineComment } from "./github/actions.ts";
 
 // ---- interface language (设置里可切换中/英) ----
@@ -142,6 +143,7 @@ const EN: Record<string, string> = {
   "同步历史": "Sync history",
   "同步中…": "Syncing…",
   "同步中断，将自动续跑": "Sync interrupted — will resume automatically",
+  "查看完整历史": "Full history",
   "确定要将勾选的审查意见提交到 GitHub 吗？": "Submit the selected review points to GitHub?",
   "在 GitHub 查看这次 review": "View this review on GitHub",
   "状态": "status",
@@ -546,7 +548,7 @@ function renderInbox(
   }
 
   const open = store.listOpen().filter(inRepo);
-  const cards = open.map(renderInboxCard).join("");
+  const cards = open.map((p) => renderInboxCard(store, p)).join("");
 
 
   // Repo management lives on the settings page; the inbox only shows cards.
@@ -634,7 +636,7 @@ function renderItemPage(store: Store, owner: string, repo: string, number: numbe
       <div class="tlhead"><b>${esc(e.author)}</b>
         ${e.kind === "review" ? `<span class="chip st-review">${esc(e.reviewState ?? "REVIEW")}</span>` : ""}
         <span class="meta">${esc(fmtWhen(Date.parse(e.createdAt)))}</span></div>
-      ${e.body.trim() ? `<div class="tlbody">${esc(e.body)}</div>` : ""}</li>`;
+      ${e.body.trim() ? `<div class="tlbody md">${mdToHtml(e.body)}</div>` : ""}</li>`;
 
   const timeline = it.timeline.length
     ? `<h2>${t("评论时间线")} (${it.timeline.length})</h2><ul class="tl">${it.timeline.map(entryLi).join("")}</ul>`
@@ -648,7 +650,7 @@ function renderItemPage(store: Store, owner: string, repo: string, number: numbe
        <a class="ext" href="${esc(it.htmlUrl)}" target="_blank" rel="noopener">${t("在 GitHub 打开")} ${icon("ext", 12)}</a></div>
      <h1>${esc(it.title)}</h1>
      <p class="meta">${esc(it.author)} · ${dates} ${labels}</p>
-     ${it.body.trim() ? `<div class="panel"><div class="tlbody">${esc(it.body)}</div></div>` : ""}
+     ${it.body.trim() ? `<div class="panel"><div class="tlbody md">${mdToHtml(it.body)}</div></div>` : ""}
      ${timeline}`,
     { side },
   );
@@ -1051,7 +1053,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(buf);
 }
 
-function renderInboxCard(p: PendingDecision): string {
+function renderInboxCard(store: Store, p: PendingDecision): string {
   const d = p.decision;
   const conf = Math.round(d.confidence * 100);
   const tok = `<input type="hidden" name="token" value="${esc(p.token)}">`;
@@ -1100,12 +1102,43 @@ function renderInboxCard(p: PendingDecision): string {
       : `<span class="tag tag-issue">Issue</span>`;
   return `<div class="card">
     <div class="cardhead">${tag}<b>${esc(p.owner)}/${esc(p.repo)}</b><span>#${p.number}</span>
-      <a class="ext" href="/item/${encodeURIComponent(p.owner)}/${encodeURIComponent(p.repo)}/${p.number}">${icon("clock", 12)} ${t("历史")}</a>
       <a class="ext" href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">${t("在 GitHub 打开")} ${icon("ext", 12)}</a></div>
     <div class="title">${esc(clip(p.title, 200))}</div>
     <div class="reasoning">${icon("spark", 14)} ${esc(clip(displayText(d.reasoning, d.reasoningEn), 600))} <span class="meta">${confLabel(conf)}</span></div>
     ${body}
+    ${renderCardHistory(store, p)}
   </div>`;
+}
+
+/** Collapsed conversation history under a pending card (from the local archive). */
+const CARD_HISTORY_MAX = 20;
+function renderCardHistory(store: Store, p: PendingDecision): string {
+  const it = store.getArchiveItem(`${p.owner}/${p.repo}`, p.itemType, p.number);
+  const itemUrl = `/item/${encodeURIComponent(p.owner)}/${encodeURIComponent(p.repo)}/${p.number}`;
+  if (!it) {
+    return `<details class="cardhist"><summary>${icon("clock", 14)} ${t("历史")}</summary>
+      <p class="meta">${t("该条目尚未同步到本地档案")}</p></details>`;
+  }
+  // Opening post first, then the most recent comments/reviews.
+  const opening = `<li><div class="tlhead"><b>${esc(it.author)}</b>
+      <span class="meta">${esc(fmtWhen(Date.parse(it.ghCreatedAt)))}</span></div>
+    ${it.body.trim() ? `<div class="tlbody md">${mdToHtml(clipMd(it.body, 600))}</div>` : ""}</li>`;
+  const recent = it.timeline.slice(-CARD_HISTORY_MAX);
+  const entries = recent
+    .map(
+      (e) => `<li><div class="tlhead"><b>${esc(e.author)}</b>
+        ${e.kind === "review" ? `<span class="chip st-review">${esc(e.reviewState ?? "REVIEW")}</span>` : ""}
+        <span class="meta">${esc(fmtWhen(Date.parse(e.createdAt)))}</span></div>
+        ${e.body.trim() ? `<div class="tlbody md">${mdToHtml(clipMd(e.body, 600))}</div>` : ""}</li>`,
+    )
+    .join("");
+  const more =
+    it.timeline.length > CARD_HISTORY_MAX
+      ? `<p class="meta"><a href="${itemUrl}">${t("查看完整历史")}（${it.timeline.length}）</a></p>`
+      : "";
+  return `<details class="cardhist"><summary>${icon("clock", 14)} ${t("历史")}${
+    it.timeline.length ? ` (${it.timeline.length})` : ""
+  }</summary><ul class="tl">${opening}${entries}</ul>${more}</details>`;
 }
 
 async function handleCardAction(
@@ -1644,12 +1677,29 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
   .archline{display:flex;align-items:center;gap:.8rem;flex-wrap:wrap;margin:-.4rem 0 1rem}
   .archline button{font-size:.8rem;padding:.3rem .8rem}
   .cardhead a.ext+a.ext{margin-left:.75rem}
+  .cardhist{margin-top:.8rem;border-top:1px solid var(--border2);padding-top:.55rem}
+  .cardhist summary{font-size:.85rem;font-weight:600;color:var(--muted)}
+  .cardhist summary:hover{color:var(--text)}
+  .cardhist .tl{margin-top:.6rem}
+  .cardhist .tlbody{font-size:.84rem}
   ul.tl{list-style:none;padding:0;margin:0}
   ul.tl li{border-left:2px solid var(--border);padding:.45rem 0 .55rem 1rem;margin:0 0 .3rem}
   .tlhead{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
   .tlhead .chip{font-size:.68rem}
   .tlbody{white-space:pre-wrap;word-wrap:break-word;font-size:.88rem;line-height:1.55;
     margin-top:.3rem;color:var(--text)}
+  .tlbody.md{white-space:normal}
+  .md p{margin:.35rem 0}
+  .md pre{margin:.5rem 0;font-size:.8rem}
+  .md blockquote{border-left:3px solid var(--border);margin:.4rem 0;padding:.1rem .8rem;color:var(--muted)}
+  .md .mdh{font-weight:700;margin:.65rem 0 .3rem}
+  .md .mdh1{font-size:1.02rem}.md .mdh2{font-size:.96rem}.md .mdh3{font-size:.9rem}
+  .md ul,.md ol{margin:.35rem 0;padding-left:1.5rem}
+  .md li{margin:.15rem 0}
+  .md img{max-width:100%;max-height:420px;border-radius:8px;border:1px solid var(--border);
+    display:block;margin:.45rem 0}
+  .md a{word-break:break-all}
+  .md hr{border:0;border-top:1px solid var(--border2);margin:.7rem 0}
 
   /* buttons */
   button,a.btn{font:inherit;font-size:.88rem;font-weight:600;padding:.45rem 1.05rem;border:0;
