@@ -1058,6 +1058,9 @@ function send(res: ServerResponse, status: number, html: string): void {
   const body = Buffer.from(html, "utf8");
   const headers: Record<string, string | number> = {
     "content-type": "text/html; charset=utf-8",
+    // Everything here is dynamic local state (settings forms, card lists). A
+    // heuristically-cached stale page could show or submit outdated form values.
+    "cache-control": "no-store",
   };
   // The review page inlines the whole PR diff and can reach several MB of highly
   // compressible text; gzip turns that into a few hundred KB so it opens fast even
