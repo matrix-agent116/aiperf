@@ -56,7 +56,7 @@ function showWindow() {
 }
 
 function updateBadge(count) {
-  if (tray) tray.setTitle(count > 0 ? `📥${count}` : "📥");
+  if (tray) tray.setTitle(count > 0 ? ` ${count}` : "");
   if (app.dock) app.setBadgeCount(count);
 }
 
@@ -113,18 +113,16 @@ function startCore() {
 }
 
 function buildTray() {
-  tray = new Tray(nativeImage.createEmpty());
-  tray.setTitle("📥");
+  // Template image (black glyph + alpha): macOS recolors it for light/dark menu bars.
+  const icon = nativeImage.createFromPath(path.join(dir, "assets/trayTemplate.png"));
+  icon.setTemplateImage(true);
+  tray = new Tray(icon);
   tray.setToolTip("Git Triage");
   tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: "打开 Inbox", click: showWindow },
-      { label: "立即轮询", click: () => core?.postMessage({ type: "pollNow" }) },
-      { type: "separator" },
-      { label: "退出", click: () => app.quit() },
-    ]),
+    Menu.buildFromTemplate([{ label: "退出", click: () => app.quit() }]),
   );
   tray.on("click", showWindow);
+  tray.on("double-click", showWindow);
 }
 
 const gotLock = app.requestSingleInstanceLock();
@@ -134,6 +132,18 @@ if (!gotLock) {
   app.on("second-instance", showWindow);
 
   app.whenReady().then(() => {
+    // Packaged builds get the icon from the bundle (build/icon.icns); this covers dev runs.
+    if (app.dock && !app.isPackaged) app.dock.setIcon(path.join(rootDir, "build/icon.png"));
+    // Drop Electron's default menus. macOS must keep an app menu (quit/hide) and
+    // needs an Edit menu for ⌘C/⌘V/⌘A to reach the web UI's text fields; the
+    // menu title comes from the bundle name (Git Triage when packaged).
+    if (process.platform === "darwin") {
+      Menu.setApplicationMenu(
+        Menu.buildFromTemplate([{ role: "appMenu" }, { role: "editMenu" }]),
+      );
+    } else {
+      Menu.setApplicationMenu(null);
+    }
     buildTray();
     startCore();
   });

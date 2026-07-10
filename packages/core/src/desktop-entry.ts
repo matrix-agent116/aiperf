@@ -14,7 +14,7 @@ initLogCapture();
  *   → {type:"ready", port, configured}         server is up, load the window
  *   → {type:"card", card:{…}}                  fresh decision — show a notification
  *   → {type:"badge", count}                    open-card count for tray/dock badge
- *   ← {type:"pollNow"}                         tray menu / wake-from-sleep kick
+ *   ← {type:"pollNow"}                         shell-initiated poll kick (e.g. wake-from-sleep)
  *   ← {type:"shutdown"}                        graceful exit
  */
 
