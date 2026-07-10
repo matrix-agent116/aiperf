@@ -350,7 +350,7 @@ function renderSidebar(
       ${opts.count ? `<span class="scount${opts.hot ? " hot" : ""}">${opts.count}</span>` : ""}
     </a>`;
 
-  const folder = (view: "open" | "done", icon: string, label: string, total: number): string => {
+  const folder = (view: "open" | "done", iconHtml: string, label: string, total: number): string => {
     const rows = keys
       .map((k) => {
         const c = byKey.get(k);
@@ -363,18 +363,22 @@ function renderSidebar(
         });
       })
       .join("");
-    return (
-      item(`/inbox?view=${view}`, label, {
-        icon,
-        count: total,
-        hot: view === "open" && total > 0,
-        on: active.view === view && !active.repo,
-      }) + rows
-    );
+    const head = item(`/inbox?view=${view}`, label, {
+      icon: iconHtml,
+      count: total,
+      hot: view === "open" && total > 0,
+      on: active.view === view && !active.repo,
+    });
+    // Collapsible: the chevron toggles .closed (persisted per folder in
+    // localStorage by the page script); the header link still navigates.
+    return `<div class="sfolder" data-fold="${view}">
+      <div class="fhead">${head}<button class="fold" aria-label="toggle">${icon("chev", 13)}</button></div>
+      <div class="fkids">${rows}</div>
+    </div>`;
   };
 
   return `<aside class="side">
-    <div class="sbrand"><span class="mark">${icon("pr", 15)}</span>Git Triage</div>
+    <div class="sbrand"><span class="mark">${icon("pr", 15)}</span>GitTriage</div>
     <nav class="snav">
       ${folder("open", icon("inbox"), t("待处理"), totalOpen)}
       <div class="sgap"></div>
@@ -472,7 +476,7 @@ function renderSetupWizard(): string {
     `<div class="wizard">
      <div class="whead">
        <span class="logo mark">${icon("pr", 26)}</span>
-       <h1>欢迎使用 Git Triage</h1>
+       <h1>欢迎使用 GitTriage</h1>
        <p class="meta">两步完成初始设置。仓库不在这里添加 —— 完成后在「设置」里随时添加。</p>
      </div>
 
@@ -1174,6 +1178,15 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
   .side a.active .scount{background:var(--accent);color:#fff}
   .sfoot{margin-top:auto;border-top:1px solid var(--border2);padding-top:.55rem;
     display:flex;flex-direction:column;gap:1px}
+  .sfolder .fhead{display:flex;align-items:center;gap:1px}
+  .sfolder .fkids{display:flex;flex-direction:column;gap:1px}
+  .sfolder .fhead>a{flex:1}
+  .side .fold{background:none;border:0;color:var(--faint);cursor:pointer;flex:none;
+    display:inline-flex;align-items:center;padding:.3rem .35rem;border-radius:6px;box-shadow:none}
+  .side .fold:hover{background:var(--surface2);color:var(--text);filter:none}
+  .side .fold svg{transition:transform .15s}
+  .sfolder.closed .fold svg{transform:rotate(-90deg)}
+  .sfolder.closed .fkids{display:none}
   @media(max-width:760px){.side{display:none}body.withside main{margin-left:0}}
 
   /* logs */
@@ -1330,6 +1343,17 @@ document.addEventListener('toggle',function(e){
   d.appendChild(t.content.cloneNode(true));
   t.remove();
 },true);
+// Sidebar folder collapse, persisted per folder across navigations/refreshes.
+document.querySelectorAll('.sfolder').forEach(function(f){
+  try{if(localStorage.getItem('fold:'+f.dataset.fold)==='1')f.classList.add('closed')}catch(_){}
+});
+document.addEventListener('click',function(e){
+  var b=e.target.closest&&e.target.closest('.fold');
+  if(!b) return;
+  var f=b.closest('.sfolder');
+  f.classList.toggle('closed');
+  try{localStorage.setItem('fold:'+f.dataset.fold,f.classList.contains('closed')?'1':'')}catch(_){}
+});
 </script></body></html>`;
 }
 
@@ -1344,6 +1368,7 @@ const ICON_PATHS: Record<string, string> = {
   ext: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
   spark: '<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
+  chev: '<path d="m6 9 6 6 6-6"/>',
   ban: '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/>',
   save: '<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>',

@@ -37,7 +37,7 @@ function showWindow() {
     width: 1200,
     height: 860,
     show: false,
-    title: "Git Triage",
+    title: "GitTriage",
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
   win.maximize();
@@ -132,7 +132,7 @@ function buildTray() {
   const icon = nativeImage.createFromPath(path.join(dir, "assets/trayTemplate.png"));
   icon.setTemplateImage(true);
   tray = new Tray(icon);
-  tray.setToolTip("Git Triage");
+  tray.setToolTip("GitTriage");
   tray.setContextMenu(
     Menu.buildFromTemplate([{ label: "退出", click: () => app.quit() }]),
   );
