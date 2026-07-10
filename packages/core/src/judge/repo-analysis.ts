@@ -183,6 +183,8 @@ export async function analyzeRepo(
       options: {
         model,
         systemPrompt: SYSTEM_PROMPT,
+        // See judge.ts: literal "node" is missing from a Finder-launched app's PATH.
+        executable: process.execPath as "node",
         cwd,
         // Read-only built-ins only — the repo's code is untrusted, never executed.
         allowedTools: ["Read", "Grep", "Glob"],

@@ -139,6 +139,12 @@ async function runQuery(
     options: {
       model,
       systemPrompt: SYSTEM_PROMPT,
+      // The SDK's default is to spawn the literal "node" from PATH — absent when
+      // the packaged app is launched from Finder (GUI PATH). process.execPath is
+      // always right: plain node in dev/headless, and inside the Electron
+      // utilityProcess it's the helper binary which runs as node because
+      // desktop-entry sets ELECTRON_RUN_AS_NODE=1 (inherited by the child).
+      executable: process.execPath as "node",
       ...(env.cwd ? { cwd: env.cwd } : {}),
       mcpServers: env.mcpServers,
       allowedTools: env.allowedTools,
