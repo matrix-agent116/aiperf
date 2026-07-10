@@ -30,7 +30,7 @@ const EN: Record<string, string> = {
   "设置": "Settings",
   "日志": "Logs",
   "预览": "Preview",
-  "发布内容": "Outgoing",
+  "发布": "Outgoing",
   "没有待处理的卡片": "No pending cards",
   "轮询每隔几分钟运行一次，新的判定会自动出现在这里": "Polling runs every few minutes — new judgments show up here automatically",
   "还没有监控任何仓库": "No repositories watched yet",
@@ -145,7 +145,7 @@ function postText(zh?: string | null, en?: string | null): string {
 function outgoingLabel(editable = false): string {
   return UI === "en"
     ? `Outgoing (${LANGS.post} — posted to GitHub${editable ? ", editable" : ""})`
-    : `发布内容（${LANGS.post}，实际发布到 GitHub${editable ? "，可编辑" : ""}）`;
+    : `发布（${LANGS.post}，实际发布到 GitHub${editable ? "，可编辑" : ""}）`;
 }
 
 const REPLY_RE = /^\/reply\/([A-Za-z0-9_-]+)\/?$/;
@@ -1104,7 +1104,7 @@ function send(res: ServerResponse, status: number, html: string): void {
 
 /** Global language-tab UI: preview (display language) vs outgoing (post language). */
 function langTabs(): string {
-  return `<div class="tabs"><button data-l="zh" class="active" onclick="setLang('zh')">${t("预览")} · ${esc(LANGS.display)}</button><button data-l="en" onclick="setLang('en')">${t("发布内容")} · ${esc(LANGS.post)}</button></div>`;
+  return `<div class="tabs"><button data-l="zh" class="active" onclick="setLang('zh')">${t("预览")} · ${esc(LANGS.display)}</button><button data-l="en" onclick="setLang('en')">${t("发布")} · ${esc(LANGS.post)}</button></div>`;
 }
 
 function page(
@@ -1128,13 +1128,20 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
     --bg:#f4f6fa;--surface:#fff;--surface2:#f6f8fb;--border:#e2e8f0;--border2:#eef2f7;
     --text:#0f172a;--muted:#64748b;--faint:#94a3b8;
     --accent:#2f6bff;--accent-bg:#ebf1ff;--ok:#15803d;--ok-bg:#e7f5eb;--danger:#c53030;
+    /* dark navy sidebar in both themes — a distinct surface from the content column */
+    --side-bg:#1c2537;--side-bg2:#141c2b;--side-text:#eef2f9;--side-muted:#a7b4ca;
+    --side-hover:rgba(255,255,255,.07);--side-active:rgba(104,150,255,.2);--side-active-text:#aac6ff;
+    --side-border:rgba(255,255,255,.09);--side-count:rgba(255,255,255,.1);
     --shadow:0 1px 2px rgba(15,23,42,.06),0 2px 6px rgba(15,23,42,.05);
     --shadow-lg:0 6px 20px rgba(15,23,42,.12);--r:12px;
   }
   @media(prefers-color-scheme:dark){:root{
-    --bg:#0b1120;--surface:#111a2e;--surface2:#182338;--border:#263450;--border2:#1e2a42;
+    --bg:#0e1526;--surface:#141f36;--surface2:#1b2740;--border:#2a3a58;--border2:#223049;
     --text:#e6ecf5;--muted:#93a4bc;--faint:#64748b;
     --accent:#6494ff;--accent-bg:#1a2a4d;--ok:#3fce6f;--ok-bg:#12291c;--danger:#f27676;
+    --side-bg:#070c16;--side-bg2:#05090f;--side-text:#e6ecf5;--side-muted:#94a3bb;
+    --side-hover:rgba(255,255,255,.06);--side-active:rgba(104,150,255,.18);--side-active-text:#9fbdff;
+    --side-border:rgba(255,255,255,.07);--side-count:rgba(255,255,255,.09);
     --shadow:0 1px 2px rgba(0,0,0,.5);--shadow-lg:0 8px 24px rgba(0,0,0,.55);
   }}
   svg.i{flex:none;vertical-align:-2px}
@@ -1159,31 +1166,39 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
 
   /* sidebar (mail-client layout) */
   .side{position:fixed;top:0;bottom:0;left:0;width:236px;z-index:20;
-    display:flex;flex-direction:column;background:var(--surface);
-    border-right:1px solid var(--border);padding:.85rem .6rem .7rem;overflow-y:auto}
-  .sbrand{display:flex;align-items:center;font-weight:700;font-size:.95rem;letter-spacing:.01em;padding:.2rem .6rem .8rem}
+    display:flex;flex-direction:column;background:linear-gradient(180deg,var(--side-bg),var(--side-bg2));
+    border-right:1px solid var(--side-border);padding:.85rem .6rem .7rem;overflow-y:auto}
+  .sbrand{display:flex;align-items:center;font-weight:700;font-size:.95rem;letter-spacing:.01em;
+    color:var(--side-text);
+    /* frosted-glass header: sticky, translucent, blurs the nav scrolling beneath */
+    position:sticky;top:-.85rem;z-index:2;margin:-.85rem -.6rem .5rem;padding:1rem 1.2rem .85rem;
+    background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.02)),
+      color-mix(in srgb,var(--side-bg) 45%,transparent);
+    backdrop-filter:blur(14px) saturate(1.6);-webkit-backdrop-filter:blur(14px) saturate(1.6);
+    border-bottom:1px solid var(--side-border)}
   .side a .ic{display:inline-flex;align-items:center;justify-content:center}
   .snav{display:flex;flex-direction:column;gap:1px}
   .sgap{height:.9rem}
-  .side a{display:flex;align-items:center;gap:.45rem;padding:.32rem .6rem;border-radius:8px;
-    color:var(--muted);text-decoration:none;font-size:.88rem;font-weight:550;min-width:0}
+  .side a{display:flex;align-items:center;gap:.45rem;padding:.34rem .6rem;border-radius:8px;
+    color:var(--side-muted);text-decoration:none;font-size:.88rem;font-weight:550;min-width:0;
+    transition:background .12s,color .12s}
   .side a .ic{width:1.2rem;text-align:center;flex:none}
   .side a .lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .side a.sub{padding-left:2.15rem;font-size:.83rem;font-weight:450}
-  .side a:hover{background:var(--surface2);color:var(--text)}
-  .side a.active{background:var(--accent-bg);color:var(--accent);font-weight:650}
+  .side a:hover{background:var(--side-hover);color:var(--side-text)}
+  .side a.active{background:var(--side-active);color:var(--side-active-text);font-weight:650}
   .scount{margin-left:auto;flex:none;font-size:.7rem;font-weight:700;
-    background:var(--surface2);color:var(--faint);border-radius:99px;padding:.02rem .45rem}
+    background:var(--side-count);color:var(--side-muted);border-radius:99px;padding:.02rem .45rem}
   .scount.hot{background:var(--accent);color:#fff}
   .side a.active .scount{background:var(--accent);color:#fff}
-  .sfoot{margin-top:auto;border-top:1px solid var(--border2);padding-top:.55rem;
+  .sfoot{margin-top:auto;border-top:1px solid var(--side-border);padding-top:.55rem;
     display:flex;flex-direction:column;gap:1px}
   .sfolder .fhead{display:flex;align-items:center;gap:1px}
   .sfolder .fkids{display:flex;flex-direction:column;gap:1px}
   .sfolder .fhead>a{flex:1}
-  .side .fold{background:none;border:0;color:var(--faint);cursor:pointer;flex:none;
+  .side .fold{background:none;border:0;color:var(--side-muted);cursor:pointer;flex:none;
     display:inline-flex;align-items:center;padding:.3rem .35rem;border-radius:6px;box-shadow:none}
-  .side .fold:hover{background:var(--surface2);color:var(--text);filter:none}
+  .side .fold:hover{background:var(--side-hover);color:var(--side-text);filter:none}
   .side .fold svg{transition:transform .15s}
   .sfolder.closed .fold svg{transform:rotate(-90deg)}
   .sfolder.closed .fkids{display:none}
