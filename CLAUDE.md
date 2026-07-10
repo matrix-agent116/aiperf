@@ -67,6 +67,8 @@ Three settings drive all language behavior (0.6.0; previously hardcoded English-
 
 `buildSystemPrompt(postLang, displayLang)` in `judge/prompt.ts` threads both into the judge. Keep the posted-vs-display split for any new user-facing field, and add new UI strings to the `EN` map.
 
+Changing either content language **re-judges all open cards automatically**: `engine.setConfig` detects the change and calls `requeueOpenCards()` (clears the items' `processed` fingerprints via `store.clearProcessedForItem`, rewinds repo cursors to 24h before the earliest open card via `store.rewindCursor`); the next cycle re-fetches and re-judges them, and the fresh cards supersede the old ones through the existing supersede path. Done/archived cards keep their original languages.
+
 ### Performance conventions
 
 - `store.ts` `COLS_NO_CTX`: list/sweep queries select `NULL AS context_json` to avoid loading large PR diffs; only `getPending(id)` reads the full row.

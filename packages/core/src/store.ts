@@ -184,6 +184,27 @@ export class Store {
       .run(fingerprint, Date.now());
   }
 
+  /**
+   * Drop every fingerprint of one item (any updatedAt) so the next poll re-judges
+   * it. Fingerprints are `itemKey@updatedAt`; escape LIKE wildcards in the key.
+   */
+  clearProcessedForItem(itemKeyPrefix: string): void {
+    const escaped = itemKeyPrefix.replace(/([%_\\])/g, "\\$1");
+    this.db
+      .prepare("DELETE FROM processed WHERE fingerprint LIKE ? ESCAPE '\\'")
+      .run(`${escaped}@%`);
+  }
+
+  /** Move a repo cursor backward (never forward) so older items are re-fetched. */
+  rewindCursor(repo: string, iso: string): void {
+    // ISO-8601 UTC strings compare lexicographically, so string > works here.
+    this.db
+      .prepare(
+        "UPDATE cursors SET last_polled_at = ? WHERE repo = ? AND last_polled_at > ?",
+      )
+      .run(iso, repo, iso);
+  }
+
   // ---- pending decisions ----
   createPending(
     input: Omit<PendingDecision, "id" | "status" | "createdAt" | "token">,
