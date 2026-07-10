@@ -144,6 +144,7 @@ const EN: Record<string, string> = {
   "同步中…": "Syncing…",
   "同步中断，将自动续跑": "Sync interrupted — will resume automatically",
   "查看完整历史": "Full history",
+  "作者": "OP",
   "确定要将勾选的审查意见提交到 GitHub 吗？": "Submit the selected review points to GitHub?",
   "在 GitHub 查看这次 review": "View this review on GitHub",
   "状态": "status",
@@ -632,10 +633,8 @@ function renderItemPage(store: Store, owner: string, repo: string, number: numbe
     `</span>`;
 
   const entryLi = (e: { kind: string; author: string; createdAt: string; body: string; reviewState?: string }): string =>
-    `<li>
-      <div class="tlhead"><b>${esc(e.author)}</b>
-        ${e.kind === "review" ? `<span class="chip st-review">${esc(e.reviewState ?? "REVIEW")}</span>` : ""}
-        <span class="meta">${esc(fmtWhen(Date.parse(e.createdAt)))}</span></div>
+    `<li class="${userColorClass(e.author)}">
+      ${tlHead(e.author, it.author, e, e.createdAt)}
       ${e.body.trim() ? `<div class="tlbody md">${mdToHtml(e.body)}</div>` : ""}</li>`;
 
   const timeline = it.timeline.length
@@ -1110,6 +1109,21 @@ function renderInboxCard(store: Store, p: PendingDecision): string {
   </div>`;
 }
 
+/** Stable per-user tint class for timeline entries (readability: who said what). */
+function userColorClass(author: string): string {
+  let h = 0;
+  for (const ch of author) h = (h * 31 + (ch.codePointAt(0) ?? 0)) % 997;
+  return `tlu-${h % 6}`;
+}
+
+/** Timeline entry header: author + OP marker + review state + time. */
+function tlHead(author: string, opAuthor: string, e?: { kind: string; reviewState?: string }, at?: string): string {
+  return `<div class="tlhead"><b>${esc(author)}</b>
+    ${author === opAuthor ? `<span class="chip st-op">${t("作者")}</span>` : ""}
+    ${e?.kind === "review" ? `<span class="chip st-review">${esc(e.reviewState ?? "REVIEW")}</span>` : ""}
+    ${at ? `<span class="meta">${esc(fmtWhen(Date.parse(at)))}</span>` : ""}</div>`;
+}
+
 /** Collapsed conversation history under a pending card (from the local archive). */
 const CARD_HISTORY_MAX = 20;
 function renderCardHistory(store: Store, p: PendingDecision): string {
@@ -1120,15 +1134,12 @@ function renderCardHistory(store: Store, p: PendingDecision): string {
       <p class="meta">${t("该条目尚未同步到本地档案")}</p></details>`;
   }
   // Opening post first, then the most recent comments/reviews.
-  const opening = `<li><div class="tlhead"><b>${esc(it.author)}</b>
-      <span class="meta">${esc(fmtWhen(Date.parse(it.ghCreatedAt)))}</span></div>
+  const opening = `<li class="${userColorClass(it.author)}">${tlHead(it.author, it.author, undefined, it.ghCreatedAt)}
     ${it.body.trim() ? `<div class="tlbody md">${mdToHtml(clipMd(it.body, 600))}</div>` : ""}</li>`;
   const recent = it.timeline.slice(-CARD_HISTORY_MAX);
   const entries = recent
     .map(
-      (e) => `<li><div class="tlhead"><b>${esc(e.author)}</b>
-        ${e.kind === "review" ? `<span class="chip st-review">${esc(e.reviewState ?? "REVIEW")}</span>` : ""}
-        <span class="meta">${esc(fmtWhen(Date.parse(e.createdAt)))}</span></div>
+      (e) => `<li class="${userColorClass(e.author)}">${tlHead(e.author, it.author, e, e.createdAt)}
         ${e.body.trim() ? `<div class="tlbody md">${mdToHtml(clipMd(e.body, 600))}</div>` : ""}</li>`,
     )
     .join("");
@@ -1683,7 +1694,16 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
   .cardhist .tl{margin-top:.6rem}
   .cardhist .tlbody{font-size:.84rem}
   ul.tl{list-style:none;padding:0;margin:0}
-  ul.tl li{border-left:2px solid var(--border);padding:.45rem 0 .55rem 1rem;margin:0 0 .3rem}
+  ul.tl li{border-left:3px solid var(--border);border-radius:0 10px 10px 0;
+    padding:.5rem .9rem .55rem;margin:0 0 .45rem;background:var(--surface2)}
+  /* per-user tint (stable hash of the author name) so voices are easy to tell apart */
+  ul.tl li.tlu-0{background:rgba(88,133,255,.09);border-left-color:#5885ff}
+  ul.tl li.tlu-1{background:rgba(63,180,110,.09);border-left-color:#3fb46e}
+  ul.tl li.tlu-2{background:rgba(155,108,255,.09);border-left-color:#9b6cff}
+  ul.tl li.tlu-3{background:rgba(235,158,52,.1);border-left-color:#eb9e34}
+  ul.tl li.tlu-4{background:rgba(233,92,158,.09);border-left-color:#e95c9e}
+  ul.tl li.tlu-5{background:rgba(46,178,178,.09);border-left-color:#2eb2b2}
+  .chip.st-op{background:var(--accent-bg);color:var(--accent)}
   .tlhead{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
   .tlhead .chip{font-size:.68rem}
   .tlbody{white-space:pre-wrap;word-wrap:break-word;font-size:.88rem;line-height:1.55;
