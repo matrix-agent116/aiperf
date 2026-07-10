@@ -323,6 +323,30 @@ export class Store {
     return rows.map(rowToPending);
   }
 
+  /** Terminal-status cards (the "done" folder in the mail-style UI), newest first. */
+  listDone(limit = 100): PendingDecision[] {
+    const rows = this.db
+      .prepare(
+        `SELECT ${COLS_NO_CTX} FROM pending
+         WHERE status NOT IN ('pending', 'awaiting_edit')
+         ORDER BY created_at DESC LIMIT ?`,
+      )
+      .all(limit) as unknown as PendingRow[];
+    return rows.map(rowToPending);
+  }
+
+  /** Per-repo open/done tallies for the sidebar folder tree. */
+  countByRepo(): { owner: string; repo: string; open: number; done: number }[] {
+    return this.db
+      .prepare(
+        `SELECT owner, repo,
+           SUM(CASE WHEN status IN ('pending', 'awaiting_edit') THEN 1 ELSE 0 END) AS open,
+           SUM(CASE WHEN status NOT IN ('pending', 'awaiting_edit') THEN 1 ELSE 0 END) AS done
+         FROM pending GROUP BY owner, repo ORDER BY owner, repo`,
+      )
+      .all() as unknown as { owner: string; repo: string; open: number; done: number }[];
+  }
+
   countOpen(): number {
     const row = this.db
       .prepare(

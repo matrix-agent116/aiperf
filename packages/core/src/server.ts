@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { gzipSync } from "node:zlib";
+import { recentLogs } from "./log.ts";
 import type { Store, PendingDecision } from "./store.ts";
 import type { TriageEngine } from "./engine.ts";
 import type { SuggestedAction } from "./judge/schema.ts";
@@ -12,10 +13,13 @@ const REVIEW_RE = /^\/review\/([A-Za-z0-9_-]+)\/?$/;
 const CARD_ACTION_RE = /^\/card\/([A-Za-z0-9_-]+)\/(reply|act|ignore)\/?$/;
 
 /**
- * Local HTTP service that IS the app UI (the desktop shell loads these pages):
+ * Local HTTP service that IS the app UI (the desktop shell loads these pages).
+ * Mail-client layout: a fixed sidebar (待处理/已处理 folders grouped by repo,
+ * 设置/日志 at the bottom) next to the content column.
  *  - GET  /                    → /inbox
  *  - GET  /setup               first-run wizard: step 1 model, step 2 GitHub (no repos)
- *  - GET  /inbox               open cards + watched-repo management + recent history
+ *  - GET  /inbox?view=open|done&repo=owner/repo   folder views
+ *  - GET  /logs                recent runtime log lines (in-memory ring buffer)
  *  - POST /repos/add|remove    add/remove a watched repo from the Inbox page
  *  - POST /card/<id>/<action>  reply (with optional edited text) / act / ignore
  *  - GET  /reply/<id>          issue draft preview (read-only)
@@ -61,7 +65,13 @@ export function startHttpServer(
           res.writeHead(302, { location: "/setup" });
           return res.end();
         }
-        return send(res, 200, renderInbox(store));
+        const view = url.searchParams.get("view") === "done" ? "done" : "open";
+        const repoFilter = url.searchParams.get("repo") ?? undefined;
+        return send(res, 200, renderInbox(store, view, repoFilter));
+      }
+
+      if (req.method === "GET" && path === "/logs") {
+        return send(res, 200, renderLogsPage(store));
       }
 
       if (req.method === "GET" && path === "/setup") {
@@ -107,7 +117,8 @@ export function startHttpServer(
         if (!p || !p.token || token !== p.token) {
           return send(res, 403, page("无权访问", "<p>链接无效或缺少 token。</p>"));
         }
-        if (req.method === "GET") return send(res, 200, renderReviewPage(p));
+        if (req.method === "GET")
+          return send(res, 200, renderReviewPage(p, renderSidebar(store, { view: "open" })));
         if (req.method === "POST")
           return handleSubmit(engine, p, req, res);
       }
@@ -171,25 +182,117 @@ const STATUS_LABEL: Record<string, string> = {
   superseded: "已被取代",
 };
 
-function renderInbox(store: Store): string {
-  const open = store.listOpen();
-  const openIds = new Set(open.map((p) => p.id));
-  const recent = store.listRecent(20).filter((p) => !openIds.has(p.id));
-
-  const cards = open.map(renderInboxCard).join("");
-  const history = recent
-    .map((p) => {
-      const typeLabel = p.itemType === "pull_request" ? "PR" : "Issue";
-      return `<li class="hist"><span class="chip st-${esc(p.status)}">${esc(STATUS_LABEL[p.status] ?? p.status)}</span>
-        <a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">${esc(p.owner)}/${esc(p.repo)} ${typeLabel} #${p.number}</a>
-        <span class="meta">${esc(clip(p.title, 80))}</span></li>`;
-    })
-    .join("");
-
+/** Watched repos from settings as "owner/repo" keys (tolerates unparsable URLs). */
+function watchedRepoKeys(store: Store): { key: string; url: string }[] {
   const raw = (store.getSettingsRaw() ?? {}) as Record<string, any>;
   const repos: any[] = Array.isArray(raw.repos) ? raw.repos : [];
-  const repoRows = repos
-    .map((r) => {
+  const out: { key: string; url: string }[] = [];
+  for (const r of repos) {
+    const url = String(r?.url ?? "");
+    const m = url.match(/github\.com\/([^/]+)\/([^/#?]+)/i);
+    if (m) out.push({ key: `${m[1]}/${m[2].replace(/\.git$/, "")}`, url });
+  }
+  return out;
+}
+
+/**
+ * The mail-client sidebar: 待处理/已处理 folders with per-repo sub-folders,
+ * 设置/日志 pinned at the bottom. `active` marks the current view for highlight.
+ */
+function renderSidebar(
+  store: Store,
+  active: { view: "open" | "done" | "settings" | "logs"; repo?: string },
+): string {
+  const counts = store.countByRepo();
+  const byKey = new Map(counts.map((c) => [`${c.owner}/${c.repo}`, c]));
+  // Folder list = watched repos (even if empty) ∪ repos that still have cards.
+  const keys = [...new Set([...watchedRepoKeys(store).map((r) => r.key), ...byKey.keys()])].sort();
+  const totalOpen = counts.reduce((n, c) => n + c.open, 0);
+  const totalDone = counts.reduce((n, c) => n + c.done, 0);
+
+  const item = (
+    href: string,
+    label: string,
+    opts: { count?: number; hot?: boolean; sub?: boolean; on?: boolean; icon?: string },
+  ): string =>
+    `<a href="${esc(href)}" class="${opts.sub ? "sub" : ""}${opts.on ? " active" : ""}">
+      ${opts.icon ? `<span class="ic">${opts.icon}</span>` : ""}<span class="lbl">${esc(label)}</span>
+      ${opts.count ? `<span class="scount${opts.hot ? " hot" : ""}">${opts.count}</span>` : ""}
+    </a>`;
+
+  const folder = (view: "open" | "done", icon: string, label: string, total: number): string => {
+    const rows = keys
+      .map((k) => {
+        const c = byKey.get(k);
+        const n = view === "open" ? (c?.open ?? 0) : (c?.done ?? 0);
+        return item(`/inbox?view=${view}&repo=${encodeURIComponent(k)}`, k, {
+          count: n,
+          hot: view === "open" && n > 0,
+          sub: true,
+          on: active.view === view && active.repo === k,
+        });
+      })
+      .join("");
+    return (
+      item(`/inbox?view=${view}`, label, {
+        icon,
+        count: total,
+        hot: view === "open" && total > 0,
+        on: active.view === view && !active.repo,
+      }) + rows
+    );
+  };
+
+  return `<aside class="side">
+    <div class="sbrand">🤖 GH Triage</div>
+    <nav class="snav">
+      ${folder("open", "📥", "待处理", totalOpen)}
+      <div class="sgap"></div>
+      ${folder("done", "✅", "已处理", totalDone)}
+    </nav>
+    <div class="sfoot">
+      ${item("/settings", "设置", { icon: "⚙️", on: active.view === "settings" })}
+      ${item("/logs", "日志", { icon: "📜", on: active.view === "logs" })}
+    </div>
+  </aside>`;
+}
+
+function renderInbox(store: Store, view: "open" | "done", repoFilter?: string): string {
+  const side = renderSidebar(store, { view, repo: repoFilter });
+  const inRepo = (p: PendingDecision): boolean =>
+    !repoFilter || `${p.owner}/${p.repo}` === repoFilter;
+  const suffix = repoFilter ? ` · ${esc(repoFilter)}` : "";
+
+  if (view === "done") {
+    const done = store.listDone(200).filter(inRepo);
+    const rows = done
+      .map((p) => {
+        const typeLabel = p.itemType === "pull_request" ? "PR" : "Issue";
+        const when = new Date(p.createdAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+        return `<li class="hist"><span class="chip st-${esc(p.status)}">${esc(STATUS_LABEL[p.status] ?? p.status)}</span>
+          <span class="tag ${p.itemType === "pull_request" ? "tag-pr" : "tag-issue"}">${typeLabel}</span>
+          <a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">${esc(p.owner)}/${esc(p.repo)} #${p.number}</a>
+          <span class="meta lbl">${esc(clip(p.title, 90))}</span>
+          <span class="meta when">${esc(when)}</span></li>`;
+      })
+      .join("");
+    return page(
+      `已处理${repoFilter ? ` · ${repoFilter}` : ""}`,
+      `<h1>已处理${suffix}</h1>
+       ${rows
+         ? `<div class="panel"><ul class="histlist">${rows}</ul></div>`
+         : `<div class="empty"><span class="big">🗂</span>还没有已处理的记录${suffix ? "" : "<br><span class=\"meta\">回复 / 执行 / 忽略过的卡片会归档到这里</span>"}</div>`}`,
+      { refreshSeconds: 60, side },
+    );
+  }
+
+  const open = store.listOpen().filter(inRepo);
+  const cards = open.map(renderInboxCard).join("");
+
+  const watched = watchedRepoKeys(store);
+  const rawRepos = ((store.getSettingsRaw() ?? {}) as Record<string, any>).repos ?? [];
+  const repoRows = (Array.isArray(rawRepos) ? rawRepos : [])
+    .map((r: any) => {
       const watch: string[] = Array.isArray(r.watch) ? r.watch : ["issues", "pulls"];
       return `<li class="hist"><code>${esc(String(r.url ?? "").replace(/^https?:\/\/(www\.)?github\.com\//i, ""))}</code>
         <span class="chip">${watch.includes("issues") ? "Issues" : ""}${watch.length === 2 ? " + " : ""}${watch.includes("pulls") ? "PRs" : ""}</span>
@@ -199,9 +302,12 @@ function renderInbox(store: Store): string {
         </form></li>`;
     })
     .join("");
-  const repoSection = `<h2>📦 监控的仓库（${repos.length}）</h2>
+  // Repo management lives on the all-pending view only (folder root, mail-style).
+  const repoSection = repoFilter
+    ? ""
+    : `<h2>📦 监控的仓库（${watched.length}）</h2>
      <div class="panel">
-       ${repos.length ? `<ul class="histlist">${repoRows}</ul>` : ""}
+       ${repoRows ? `<ul class="histlist">${repoRows}</ul>` : ""}
        <form method="post" action="/repos/add" class="addrepo">
          <input type="text" name="url" placeholder="https://github.com/owner/repo" required>
          <button>＋ 添加仓库</button>
@@ -209,17 +315,37 @@ function renderInbox(store: Store): string {
        <p class="meta" style="margin:.3rem 0 0">高级选项（只看他人 / 忽略作者 / 只看 Issues 或 PRs）在<a href="/settings">设置</a>里调整。</p>
      </div>`;
 
-  const emptyState = repos.length
+  const emptyState = watched.length
     ? `<div class="empty"><span class="big">☕️</span>没有待处理的卡片<br><span class="meta">轮询每隔几分钟运行一次，新的判定会自动出现在这里</span></div>`
     : `<div class="empty"><span class="big">📦</span>还没有监控任何仓库<br><span class="meta">在下方添加一个 GitHub 仓库，轮询就会开始</span></div>`;
 
   return page(
     `Inbox (${open.length})`,
-    `<h1>待处理${open.length ? `<span class="count">${open.length}</span>` : ""}</h1>
+    `<h1>待处理${suffix}${open.length ? `<span class="count">${open.length}</span>` : ""}</h1>
      ${cards || emptyState}
-     ${repoSection}
-     ${history ? `<h2>🕘 最近处理</h2><div class="panel"><ul class="histlist">${history}</ul></div>` : ""}`,
-    { refreshSeconds: 60, nav: "inbox", badge: open.length },
+     ${repoSection}`,
+    { refreshSeconds: 60, side },
+  );
+}
+
+// ---- logs page ----
+
+function renderLogsPage(store: Store): string {
+  const lines = recentLogs();
+  const rows = lines
+    .map((l) => {
+      const t = new Date(l.ts).toLocaleTimeString("zh-CN", { hour12: false });
+      const cls = l.level === "error" ? "le" : l.level === "warn" ? "lw" : "";
+      return `<div class="ll ${cls}">[${t}] ${esc(l.text)}</div>`;
+    })
+    .join("");
+  return page(
+    "运行日志",
+    `<h1>运行日志</h1>
+     <p class="meta">进程启动以来的最近 ${lines.length} 行（内存保留上限 1000 行，重启后清空）· 每 15 秒自动刷新</p>
+     <div class="logbox" id="logbox">${rows || `<div class="ll meta">（暂无日志输出）</div>`}</div>
+     <script>var lb=document.getElementById('logbox');lb.scrollTop=lb.scrollHeight;</script>`,
+    { refreshSeconds: 15, side: renderSidebar(store, { view: "logs" }) },
   );
 }
 
@@ -445,7 +571,7 @@ function renderSettingsPage(store: Store, engine: TriageEngine): string {
        }catch(e){ msg.textContent='❌ '+e; }
      }
      </script>`,
-    { nav: "settings" },
+    { side: renderSidebar(store, { view: "settings" }) },
   );
 }
 
@@ -590,13 +716,13 @@ function serveReply(store: Store, id: string, res: ServerResponse): void {
        ${LANG_TABS}
        <div class="lang-zh"><h2>草稿回复（中文，仅供理解）</h2><pre>${esc(zh)}</pre></div>
        <div class="lang-en"><h2>Draft reply (English — this is what gets posted)</h2><pre>${esc(en)}</pre></div>`,
-      { nav: "inbox" },
+      { side: renderSidebar(store, { view: "open" }) },
     ),
   );
 }
 
 // ---- PR review page ----
-function renderReviewPage(p: PendingDecision): string {
+function renderReviewPage(p: PendingDecision, side: string): string {
   const d = p.decision;
   const files = p.context?.files ?? [];
   // Parse each file's patch once and reuse it for anchoring, snippets and the full
@@ -680,7 +806,7 @@ function renderReviewPage(p: PendingDecision): string {
      <div class="panel">${esc(d.reasoning)}</div>
      ${inner}
      ${diffSection}`,
-    { nav: "inbox", wide: true },
+    { side, wide: true },
   );
 }
 
@@ -865,23 +991,12 @@ function page(
   inner: string,
   opts?: {
     refreshSeconds?: number;
-    /** which appbar tab is active; omit for chromeless pages (wizard, errors) */
-    nav?: "inbox" | "settings";
-    /** open-card count shown next to the Inbox tab */
-    badge?: number;
+    /** prebuilt sidebar HTML (renderSidebar); omit for chromeless pages (wizard, errors) */
+    side?: string;
     /** wider content column (the review page's diffs) */
     wide?: boolean;
   },
 ): string {
-  const appbar = opts?.nav
-    ? `<header class="appbar"><div class="bar${opts.wide ? " wide" : ""}">
-        <span class="brand">🤖 GH Triage</span>
-        <nav>
-          <a href="/inbox"${opts.nav === "inbox" ? ' class="active"' : ""}>📥 Inbox${opts.badge ? ` <span class="navbadge">${opts.badge}</span>` : ""}</a>
-          <a href="/settings"${opts.nav === "settings" ? ' class="active"' : ""}>⚙️ 设置</a>
-        </nav>
-      </div></header>`
-    : "";
   return `<!doctype html><html lang="zh" data-lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeconds}">` : ""}
@@ -905,23 +1020,41 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
     font:15px/1.65 -apple-system,"SF Pro Text",system-ui,"PingFang SC","Microsoft YaHei",sans-serif}
   main{max-width:840px;margin:0 auto;padding:1.5rem 1.5rem 4rem}
   main.wide{max-width:1120px}
+  body.withside main{margin:0 0 0 236px;max-width:900px;padding:1.4rem 2rem 4rem}
+  body.withside main.wide{max-width:1200px}
   a{color:var(--accent)}
   :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
-  /* app bar */
-  .appbar{position:sticky;top:0;z-index:10;border-bottom:1px solid var(--border);
-    background:color-mix(in srgb,var(--surface) 85%,transparent);
-    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
-  .bar{max-width:840px;margin:0 auto;padding:.55rem 1.5rem;display:flex;align-items:center;gap:1rem}
-  .bar.wide{max-width:1120px}
-  .brand{font-weight:700;font-size:.95rem;letter-spacing:.01em}
-  nav{display:flex;gap:.3rem;margin-left:auto}
-  nav a{display:inline-flex;align-items:center;gap:.35rem;padding:.32rem .85rem;border-radius:8px;
-    color:var(--muted);text-decoration:none;font-size:.9rem;font-weight:500}
-  nav a:hover{background:var(--surface2);color:var(--text)}
-  nav a.active{background:var(--accent-bg);color:var(--accent);font-weight:600}
-  .navbadge{background:var(--accent);color:#fff;font-size:.7rem;font-weight:700;
-    border-radius:99px;padding:.05rem .45rem;line-height:1.4}
+  /* sidebar (mail-client layout) */
+  .side{position:fixed;top:0;bottom:0;left:0;width:236px;z-index:20;
+    display:flex;flex-direction:column;background:var(--surface);
+    border-right:1px solid var(--border);padding:.85rem .6rem .7rem;overflow-y:auto}
+  .sbrand{font-weight:700;font-size:.95rem;letter-spacing:.01em;padding:.2rem .6rem .8rem}
+  .snav{display:flex;flex-direction:column;gap:1px}
+  .sgap{height:.9rem}
+  .side a{display:flex;align-items:center;gap:.45rem;padding:.32rem .6rem;border-radius:8px;
+    color:var(--muted);text-decoration:none;font-size:.88rem;font-weight:550;min-width:0}
+  .side a .ic{width:1.2rem;text-align:center;flex:none}
+  .side a .lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .side a.sub{padding-left:2.15rem;font-size:.83rem;font-weight:450}
+  .side a:hover{background:var(--surface2);color:var(--text)}
+  .side a.active{background:var(--accent-bg);color:var(--accent);font-weight:650}
+  .scount{margin-left:auto;flex:none;font-size:.7rem;font-weight:700;
+    background:var(--surface2);color:var(--faint);border-radius:99px;padding:.02rem .45rem}
+  .scount.hot{background:var(--accent);color:#fff}
+  .side a.active .scount{background:var(--accent);color:#fff}
+  .sfoot{margin-top:auto;border-top:1px solid var(--border2);padding-top:.55rem;
+    display:flex;flex-direction:column;gap:1px}
+  @media(max-width:760px){.side{display:none}body.withside main{margin-left:0}}
+
+  /* logs */
+  .logbox{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
+    box-shadow:var(--shadow);padding:.8rem 1rem;max-height:74vh;overflow:auto;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.8rem;line-height:1.55}
+  .ll{white-space:pre-wrap;word-break:break-all}
+  .ll.lw{color:#9a6700} .ll.le{color:var(--danger)}
+  @media(prefers-color-scheme:dark){.ll.lw{color:#d29922}}
+  li.hist .when{margin-left:auto;flex:none;font-size:.78rem}
 
   /* type & headings */
   h1{font-size:1.3rem;font-weight:700;letter-spacing:-.01em;margin:.5rem 0 1rem}
@@ -1052,7 +1185,7 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
     pre.code .hl{background:#3f2e00}
     .da{background:#12261e} .dd{background:#2b1719} .dh{color:#a371f7}
   }
-</style></head><body>${appbar}<main${opts?.wide ? ' class="wide"' : ""}>${inner}</main>
+</style></head><body${opts?.side ? ' class="withside"' : ""}>${opts?.side ?? ""}<main${opts?.wide ? ' class="wide"' : ""}>${inner}</main>
 <script>
 function setLang(l){document.documentElement.dataset.lang=l;
   for(var b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.l===l);}

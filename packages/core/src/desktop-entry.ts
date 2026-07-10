@@ -2,6 +2,10 @@ import { parseSettings } from "./config.ts";
 import { Store } from "./store.ts";
 import { TriageEngine } from "./engine.ts";
 import { startHttpServer } from "./server.ts";
+import { initLogCapture } from "./log.ts";
+
+// Capture console output from the very start so /logs shows the full boot.
+initLogCapture();
 
 /**
  * Core entrypoint when running inside the Electron desktop shell's utilityProcess.

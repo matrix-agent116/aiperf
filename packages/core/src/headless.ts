@@ -2,7 +2,10 @@ import { parseSettings } from "./config.ts";
 import { Store } from "./store.ts";
 import { TriageEngine } from "./engine.ts";
 import { startHttpServer } from "./server.ts";
+import { initLogCapture } from "./log.ts";
 import { itemKey } from "./types.ts";
+
+initLogCapture();
 
 /**
  * Headless runner (no desktop shell): poll + judge + serve the local web UI.
