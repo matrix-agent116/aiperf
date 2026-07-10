@@ -57,7 +57,7 @@ The local UI (127.0.0.1 only) is gated by a per-install session token; only the 
 
 ```bash
 npm run pack   # unpacked .app for quick testing → dist/mac-arm64/Git Triage.app
-npm run dist   # installers → dist/Git Triage-<version>-arm64.dmg + .zip (Linux: AppImage/deb)
+npm run dist   # installers → dist/GitTriage-<version>-arm64.dmg + .zip (Linux: AppImage/deb)
 ```
 
 Notes:
