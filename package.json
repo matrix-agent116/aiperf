@@ -4,6 +4,7 @@
   "description": "配置驱动多仓库轮询 + 人在环路的 GitHub Issue/PR 判定 Agent（Claude Agent SDK + 桌面 App）",
   "private": true,
   "type": "module",
+  "main": "apps/desktop/main.js",
   "engines": {
     "node": ">=22"
   },
@@ -16,10 +17,46 @@
     "headless": "node packages/core/src/headless.ts",
     "poll-once": "node packages/core/src/headless.ts --once",
     "dev": "node --watch packages/core/src/headless.ts",
-    "typecheck": "tsc -p packages/core"
+    "typecheck": "tsc -p packages/core",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.1.0",
+    "@octokit/rest": "^21.0.0",
+    "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "electron": "^43.0.0",
+    "electron-builder": "^26.0.0",
     "typescript": "^5.6.0"
+  },
+  "build": {
+    "appId": "com.ghtriage.app",
+    "productName": "GH Triage",
+    "asar": false,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "apps/desktop/**/*",
+      "packages/core/src/**/*",
+      "packages/core/package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development"
+    }
   }
 }

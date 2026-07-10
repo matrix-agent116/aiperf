@@ -53,6 +53,19 @@ npm run typecheck  # tsc type check
 
 The local UI (127.0.0.1 only) is gated by a per-install session token; only the app window (or the printed headless URL) can reach it.
 
+## Build a distributable app
+
+```bash
+npm run pack   # unpacked .app for quick testing → dist/mac-arm64/GH Triage.app
+npm run dist   # installers → dist/GH Triage-<version>-arm64.dmg + .zip (Linux: AppImage/deb)
+```
+
+Notes:
+
+- The build ships the sources as-is (no compile step; Electron's Node runs the `.ts` directly) with **asar disabled** — the Agent SDK's CLI must exist as a real file so the judge can spawn it.
+- Builds are **unsigned** unless you have a Developer ID certificate; on another Mac, Gatekeeper will require right-click → Open the first time (or sign/notarize via electron-builder's standard options).
+- First launch on a machine still needs a Claude Code login (`claude login`) unless you paste a token in settings.
+
 ## Using the Inbox
 
 > Reply drafts are bilingual: the text **posted to GitHub is English** (`draftReply` / each review point's `comment`), and a parallel **Chinese** version is shown only to help you understand — it is never posted.

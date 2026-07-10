@@ -22,7 +22,11 @@ npm run app        # launch the desktop app (Electron)
 npm run headless   # daemon without the shell; prints a tokened browser URL
 npm run poll-once  # single poll+judge cycle then exit (needs settings already in the DB)
 npm run typecheck  # tsc — the only check; there are no tests and no linter
+npm run pack       # unpacked .app into dist/ (electron-builder --dir)
+npm run dist       # dmg/zip installers (config in root package.json "build")
 ```
+
+Packaging: electron-builder runs from the repo root (root `package.json` has `main`, the runtime `dependencies` duplicated from packages/core so builder collects them, and the `build` config). **asar is disabled on purpose** — the Agent SDK CLI must be a real file for the judge's spawned subprocess; don't re-enable it without `asarUnpack`-ing the SDK and verifying a judge run.
 
 Node ≥ 22 required. **All user configuration lives in the sqlite `settings` table**, edited on the in-app `/settings` page — there are no config files and no required env vars (`config.yaml`/`.env` were removed in 0.2.0; the zod schema is `SettingsSchema` in `config.ts`). Claude auth: empty token = the machine's Claude Code login; `sk-ant-…` = API key; anything else = Claude Code OAuth token (applied by `applyClaudeAuth` in `engine.ts`). Dev-only env overrides: `DB_PATH` (default `./data/state.db`; the desktop shell points it at the per-user app data dir), `REPOS_DIR`.
 
