@@ -54,6 +54,42 @@ export async function preparePrCheckout(item: TriageItem): Promise<string | null
   }
 }
 
+/**
+ * A shallow checkout of the repo's DEFAULT branch (whatever HEAD points at) for
+ * whole-repo analysis. Lives in its own directory so it never races a concurrent
+ * PR-head checkout of the same repo (those reset the working tree per PR).
+ */
+export async function prepareRepoCheckout(
+  owner: string,
+  repo: string,
+): Promise<string | null> {
+  const dir = resolve(join(REPOS_DIR, `${owner}__${repo}__default`));
+  try {
+    await mkdir(dir, { recursive: true });
+    if (!(await exists(join(dir, ".git")))) {
+      await git(dir, ["init", "-q"]);
+    }
+    await git(dir, [
+      "fetch",
+      "--depth",
+      "1",
+      "--no-tags",
+      "-q",
+      authUrl(owner, repo),
+      "HEAD",
+    ]);
+    await git(dir, ["reset", "--hard", "-q", "FETCH_HEAD"]);
+    await git(dir, ["clean", "-qdff"]);
+    console.log(`[analysis] checkout ${owner}/${repo}@HEAD -> ${dir}`);
+    return dir;
+  } catch (e) {
+    console.warn(
+      `[analysis] checkout failed for ${owner}/${repo}: ${(e as Error).message}`,
+    );
+    return null;
+  }
+}
+
 function authUrl(owner: string, repo: string): string {
   return `https://x-access-token:${getGithubToken()}@github.com/${owner}/${repo}.git`;
 }

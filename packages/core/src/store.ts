@@ -98,6 +98,13 @@ export class Store {
         token TEXT NOT NULL DEFAULT '',
         context_json TEXT
       );
+      CREATE TABLE IF NOT EXISTS repo_analysis (
+        repo_key TEXT PRIMARY KEY,   -- "owner/repo"
+        status TEXT NOT NULL,        -- running | done | error
+        json TEXT,                   -- RepoAnalysis (status=done)
+        error TEXT,                  -- message (status=error)
+        updated_at INTEGER NOT NULL
+      );
     `);
     // Migrate DBs created before these columns existed.
     this.ensureColumn("pending", "token", "TEXT NOT NULL DEFAULT ''");
@@ -316,9 +323,52 @@ export class Store {
     return row.n;
   }
 
+  // ---- whole-repo analysis (architecture map + security scan, /repo page) ----
+
+  getRepoAnalysis(repoKey: string): RepoAnalysisRecord | null {
+    const row = this.db
+      .prepare("SELECT * FROM repo_analysis WHERE repo_key = ?")
+      .get(repoKey) as
+      | { repo_key: string; status: string; json: string | null; error: string | null; updated_at: number }
+      | undefined;
+    if (!row) return null;
+    return {
+      repoKey: row.repo_key,
+      status: row.status as RepoAnalysisRecord["status"],
+      json: row.json,
+      error: row.error,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  setRepoAnalysis(
+    repoKey: string,
+    status: RepoAnalysisRecord["status"],
+    json?: string,
+    error?: string,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT INTO repo_analysis (repo_key, status, json, error, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(repo_key) DO UPDATE SET
+           status = excluded.status, json = excluded.json,
+           error = excluded.error, updated_at = excluded.updated_at`,
+      )
+      .run(repoKey, status, json ?? null, error ?? null, Date.now());
+  }
+
   close(): void {
     this.db.close();
   }
+}
+
+export interface RepoAnalysisRecord {
+  repoKey: string;
+  status: "running" | "done" | "error";
+  json: string | null;
+  error: string | null;
+  updatedAt: number;
 }
 
 function rowToPending(row: PendingRow): PendingDecision {

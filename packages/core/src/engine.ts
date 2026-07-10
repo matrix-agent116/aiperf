@@ -4,6 +4,7 @@ import { Store, type PendingDecision, type PendingStatus } from "./store.ts";
 import { pollRepo } from "./github/poller.ts";
 import { configureGithub } from "./github/client.ts";
 import { judge } from "./judge/judge.ts";
+import { analyzeRepo } from "./judge/repo-analysis.ts";
 import { postReply, executeSuggestedAction } from "./github/actions.ts";
 import { itemKey } from "./types.ts";
 
@@ -141,6 +142,36 @@ export class TriageEngine extends EventEmitter<EngineEvents> {
       throw new Error("该 issue/PR 已有新的待处理卡片，无需恢复");
     }
     return this.finalize(id, "pending", "↩️ 已恢复为待处理");
+  }
+
+  // ---- whole-repo analysis (read-only; never writes to GitHub) ----
+
+  private analysisRunning = new Set<string>();
+
+  /**
+   * Generate (or refresh) the architecture map + security scan for a repo.
+   * Fire-and-forget from the UI: status lives in store.repo_analysis and the
+   * /repo page polls it. Concurrent requests for the same repo no-op.
+   */
+  async runRepoAnalysis(owner: string, repo: string): Promise<void> {
+    if (!this.app) throw new Error("引擎未配置");
+    const key = `${owner}/${repo}`;
+    if (this.analysisRunning.has(key)) return;
+    this.analysisRunning.add(key);
+    this.store.setRepoAnalysis(key, "running");
+    try {
+      const analysis = await analyzeRepo(owner, repo, this.app.model);
+      this.store.setRepoAnalysis(key, "done", JSON.stringify(analysis));
+      console.log(
+        `[analysis] ${key}: ${analysis.components.length} components, ${analysis.findings.length} findings`,
+      );
+    } catch (e) {
+      const message = (e as Error).message;
+      console.error(`[analysis] ${key} failed:`, message);
+      this.store.setRepoAnalysis(key, "error", undefined, message);
+    } finally {
+      this.analysisRunning.delete(key);
+    }
   }
 
   /** Record a PR review submitted via the review page (the page does the GitHub write). */

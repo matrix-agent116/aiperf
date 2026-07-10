@@ -1,9 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { gzipSync } from "node:zlib";
 import { recentLogs } from "./log.ts";
-import type { Store, PendingDecision } from "./store.ts";
+import type { Store, PendingDecision, RepoAnalysisRecord } from "./store.ts";
 import type { TriageEngine } from "./engine.ts";
 import type { SuggestedAction } from "./judge/schema.ts";
+import type { RepoAnalysis, RepoComponent, RepoFinding } from "./judge/repo-analysis.ts";
 import { parseSettings, type AppConfig } from "./config.ts";
 import { parsePatch, commentableLines, type DiffLine } from "./diff.ts";
 import { submitPrReview, type InlineComment } from "./github/actions.ts";
@@ -111,6 +112,20 @@ const EN: Record<string, string> = {
   "已提交": "Submitted",
   "已提交 PR Review": "PR review submitted",
   "确定要将这条回复发布到 GitHub 吗？": "Post this reply to GitHub?",
+  "生成分析": "Generate analysis",
+  "重新生成分析": "Regenerate analysis",
+  "分析进行中…": "Analyzing…",
+  "尚未生成分析": "No analysis yet",
+  "由 AI 阅读整个仓库的代码，产出系统架构导图与安全漏洞扫描（只读，不会执行仓库代码）":
+    "AI reads the whole repository and produces an architecture map plus a security scan (read-only; the repo's code is never executed)",
+  "分析进行中，AI 正在阅读代码…": "Analysis in progress — AI is reading the code…",
+  "页面会自动刷新，通常需要几分钟": "This page refreshes automatically; a run typically takes a few minutes",
+  "分析失败": "Analysis failed",
+  "系统架构导图": "Architecture map",
+  "安全漏洞扫描": "Security scan",
+  "未发现明显安全问题": "No obvious security issues found",
+  "更新于": "Updated",
+  "引擎未配置，请先在设置页完成配置。": "The engine is not configured yet — finish setup on the settings page first.",
   "确定要将勾选的审查意见提交到 GitHub 吗？": "Submit the selected review points to GitHub?",
   "在 GitHub 查看这次 review": "View this review on GitHub",
   "状态": "status",
@@ -151,6 +166,8 @@ function outgoingLabel(editable = false): string {
 const REPLY_RE = /^\/reply\/([A-Za-z0-9_-]+)\/?$/;
 const REVIEW_RE = /^\/review\/([A-Za-z0-9_-]+)\/?$/;
 const CARD_ACTION_RE = /^\/card\/([A-Za-z0-9_-]+)\/(reply|act|ignore|restore)\/?$/;
+const REPO_PAGE_RE = /^\/repo\/([^/]+)\/([^/]+)\/?$/;
+const REPO_ANALYZE_RE = /^\/repo\/([^/]+)\/([^/]+)\/analyze\/?$/;
 
 /**
  * Local HTTP service that IS the app UI (the desktop shell loads these pages).
@@ -233,6 +250,30 @@ export function startHttpServer(
       const action = path.match(CARD_ACTION_RE);
       if (req.method === "POST" && action) {
         return handleCardAction(store, engine, action[1], action[2], req, res);
+      }
+
+      const analyze = path.match(REPO_ANALYZE_RE);
+      if (req.method === "POST" && analyze) {
+        const owner = decodeURIComponent(analyze[1]);
+        const repo = decodeURIComponent(analyze[2]);
+        if (!engine.configured) {
+          return send(res, 409, page(t("出错了"), `<p>${t("引擎未配置，请先在设置页完成配置。")}</p>`));
+        }
+        // Fire-and-forget: status lives in store.repo_analysis, the page polls it.
+        engine.runRepoAnalysis(owner, repo).catch(() => {});
+        res.writeHead(303, {
+          location: `/repo/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+        });
+        return res.end();
+      }
+
+      const repoPage = path.match(REPO_PAGE_RE);
+      if (req.method === "GET" && repoPage) {
+        return send(
+          res,
+          200,
+          renderRepoPage(store, decodeURIComponent(repoPage[1]), decodeURIComponent(repoPage[2])),
+        );
       }
 
       const reply = path.match(REPLY_RE);
@@ -331,7 +372,7 @@ function watchedRepoKeys(store: Store): { key: string; url: string }[] {
  */
 function renderSidebar(
   store: Store,
-  active: { view: "open" | "done" | "settings" | "logs"; repo?: string },
+  active: { view: "open" | "done" | "settings" | "logs" | "repo"; repo?: string },
 ): string {
   const counts = store.countByRepo();
   const byKey = new Map(counts.map((c) => [`${c.owner}/${c.repo}`, c]));
@@ -377,12 +418,27 @@ function renderSidebar(
     </div>`;
   };
 
+  // Per-repo analysis pages (architecture map + security scan).
+  const repoLinks = keys
+    .map((k) => {
+      const [o, r] = k.split("/");
+      return item(`/repo/${encodeURIComponent(o)}/${encodeURIComponent(r)}`, k, {
+        icon: icon("repo"),
+        on: active.view === "repo" && active.repo === k,
+      });
+    })
+    .join("");
+  const repoSection = keys.length
+    ? `<div class="sgap"></div><div class="shead">${t("仓库")}</div>${repoLinks}`
+    : "";
+
   return `<aside class="side">
     <div class="sbrand"><span class="mark">${icon("pr", 15)}</span>GitTriage</div>
     <nav class="snav">
       ${folder("open", icon("inbox"), t("待处理"), totalOpen)}
       <div class="sgap"></div>
       ${folder("done", icon("done"), t("已处理"), totalDone)}
+      ${repoSection}
     </nav>
     <div class="sfoot">
       ${item("/settings", t("设置"), { icon: icon("gear"), on: active.view === "settings" })}
@@ -442,6 +498,106 @@ function renderInbox(store: Store, view: "open" | "done", repoFilter?: string): 
      ${cards || emptyState}`,
     { refreshSeconds: 60, side },
   );
+}
+
+// ---- per-repo analysis page (architecture map + security scan) ----
+
+const SEV_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+const SEV_ZH: Record<string, string> = { critical: "严重", high: "高危", medium: "中危", low: "低危" };
+
+function renderRepoPage(store: Store, owner: string, repo: string): string {
+  const key = `${owner}/${repo}`;
+  const side = renderSidebar(store, { view: "repo", repo: key });
+  const rec = store.getRepoAnalysis(key);
+  const running = rec?.status === "running";
+  const analyzeUrl = `/repo/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/analyze`;
+  const btn = running
+    ? `<button disabled>${icon("clock", 14)} ${t("分析进行中…")}</button>`
+    : `<form method="post" action="${analyzeUrl}" class="inline"><button>${icon("spark", 14)} ${
+        rec ? t("重新生成分析") : t("生成分析")
+      }</button></form>`;
+  const when =
+    rec && !running
+      ? `<span class="meta">${t("更新于")} ${new Date(rec.updatedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>`
+      : "";
+
+  let body: string;
+  if (!rec) {
+    body = `<div class="empty"><span class="big">${icon("repo", 36)}</span>${t("尚未生成分析")}<br>
+      <span class="meta">${t("由 AI 阅读整个仓库的代码，产出系统架构导图与安全漏洞扫描（只读，不会执行仓库代码）")}</span></div>`;
+  } else if (running) {
+    body = `<div class="empty"><span class="big">${icon("clock", 36)}</span>${t("分析进行中，AI 正在阅读代码…")}<br>
+      <span class="meta">${t("页面会自动刷新，通常需要几分钟")}</span></div>`;
+  } else if (rec.status === "error") {
+    body = `<div class="panel"><p class="warn">${t("分析失败")}：${esc(rec.error ?? "")}</p></div>`;
+  } else {
+    body = renderAnalysis(rec);
+  }
+
+  return page(
+    key,
+    `<div class="repohead"><h1>${esc(key)}</h1>${btn}${when}</div>${body}`,
+    { side, wide: true, refreshSeconds: running ? 8 : undefined },
+  );
+}
+
+function renderAnalysis(rec: RepoAnalysisRecord): string {
+  let a: RepoAnalysis;
+  try {
+    a = JSON.parse(rec.json ?? "") as RepoAnalysis;
+  } catch {
+    return `<div class="panel"><p class="warn">${t("分析失败")}：invalid stored JSON</p></div>`;
+  }
+
+  // Architecture: components grouped into layers, dependencies as chips.
+  const groups = new Map<string, RepoComponent[]>();
+  for (const c of a.components) {
+    const g = displayText(c.groupZh, c.group) || c.group;
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g)!.push(c);
+  }
+  const compBox = (c: RepoComponent): string =>
+    `<div class="comp"><div class="cname">${esc(c.name)}</div>
+      <div class="cpath">${esc(c.path)}</div>
+      <div class="crole">${esc(displayText(c.roleZh, c.role))}</div>
+      ${
+        c.dependsOn.length
+          ? `<div class="cdeps"><span class="arr">→</span>${c.dependsOn.map((d) => `<span class="dep">${esc(d)}</span>`).join("")}</div>`
+          : ""
+      }</div>`;
+  const archRows = [...groups]
+    .map(
+      ([g, comps]) =>
+        `<div class="archrow"><div class="archlabel">${esc(g)}</div>
+         <div class="architems">${comps.map(compBox).join("")}</div></div>`,
+    )
+    .join(`<div class="archsep">${icon("chev", 14)}</div>`);
+
+  // Security findings, most severe first.
+  const findings = [...a.findings].sort(
+    (x, y) => (SEV_ORDER[x.severity] ?? 9) - (SEV_ORDER[y.severity] ?? 9),
+  );
+  const findingLi = (f: RepoFinding): string =>
+    `<li class="finding"><div class="fhead2">
+       <span class="sev sev-${esc(f.severity)}">${esc(UI === "en" ? f.severity : (SEV_ZH[f.severity] ?? f.severity))}</span>
+       <b>${esc(displayText(f.titleZh, f.title))}</b>
+       ${f.file ? `<code>${esc(f.file)}${f.line ? `:${f.line}` : ""}</code>` : ""}
+     </div>
+     <div class="fdetail">${esc(displayText(f.detailZh, f.detail))}</div>
+     ${
+       pickPair(f.suggestionZh, f.suggestion) || pickPair(f.suggestion, f.suggestionZh)
+         ? `<div class="fsug">${icon("wrench", 13)} ${esc(displayText(f.suggestionZh, f.suggestion))}</div>`
+         : ""
+     }</li>`;
+  const security = findings.length
+    ? `<ul class="findings">${findings.map(findingLi).join("")}</ul>`
+    : `<div class="empty"><span class="big">${icon("done", 36)}</span>${t("未发现明显安全问题")}</div>`;
+
+  return `<h2>${t("系统架构导图")}</h2>
+    <div class="panel"><p class="archoverview">${esc(displayText(a.overviewZh, a.overview))}</p>
+    <div class="archmap">${archRows}</div></div>
+    <h2>${t("安全漏洞扫描")}${findings.length ? `<span class="count">${findings.length}</span>` : ""}</h2>
+    ${security}`;
 }
 
 // ---- logs page ----
@@ -1202,6 +1358,8 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
   .side .fold svg{transition:transform .15s}
   .sfolder.closed .fold svg{transform:rotate(-90deg)}
   .sfolder.closed .fkids{display:none}
+  .shead{font-size:.68rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--side-muted);opacity:.75;padding:.2rem .6rem .35rem}
   @media(max-width:760px){.side{display:none}body.withside main{margin-left:0}}
 
   /* logs */
@@ -1251,7 +1409,39 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
   .sev{font-size:.72rem;font-weight:700;padding:.1rem .5rem;border-radius:99px;margin:0 .35rem}
   .sev-blocker{background:#fde3e3;color:#c02626} .sev-suggestion{background:#dcebff;color:#1d63d8}
   .sev-nit{background:var(--surface2);color:var(--muted)} .sev-question{background:#fdf3d0;color:#8a6a00}
+  .sev-critical{background:#f8caca;color:#8f0e0e} .sev-high{background:#fde3e3;color:#c02626}
+  .sev-medium{background:#fdf3d0;color:#8a6a00} .sev-low{background:var(--surface2);color:var(--muted)}
   .warn{color:var(--danger);font-size:.8rem}
+
+  /* repo analysis page */
+  .repohead{display:flex;align-items:center;gap:.9rem;flex-wrap:wrap;margin:.5rem 0 1rem}
+  .repohead h1{margin:0}
+  .archoverview{margin:.2rem 0 1.1rem;font-size:.93rem;line-height:1.6}
+  .archmap{display:flex;flex-direction:column}
+  .archrow{display:flex;gap:.8rem;align-items:stretch}
+  .archlabel{flex:none;width:104px;display:flex;align-items:center;justify-content:flex-end;
+    text-align:right;font-size:.72rem;font-weight:700;letter-spacing:.05em;
+    color:var(--muted);text-transform:uppercase}
+  .architems{display:flex;flex-wrap:wrap;gap:.6rem;flex:1}
+  .comp{background:var(--surface2);border:1px solid var(--border);border-radius:10px;
+    padding:.55rem .75rem;flex:1 1 200px;max-width:320px}
+  .comp .cname{font-weight:650;font-size:.9rem}
+  .comp .cpath{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.72rem;
+    color:var(--faint);margin:.1rem 0 .25rem;word-break:break-all}
+  .comp .crole{font-size:.82rem;color:var(--muted);line-height:1.45}
+  .cdeps{margin-top:.4rem;display:flex;flex-wrap:wrap;gap:.3rem;align-items:center}
+  .cdeps .arr{color:var(--faint);font-size:.75rem}
+  .dep{font-size:.7rem;font-weight:600;background:var(--surface);border:1px solid var(--border2);
+    border-radius:99px;padding:.03rem .5rem;color:var(--muted)}
+  .archsep{display:flex;justify-content:center;color:var(--faint);margin:.15rem 0;margin-left:104px}
+  ul.findings{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:.8rem}
+  li.finding{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
+    padding:.8rem 1rem;box-shadow:var(--shadow)}
+  li.finding .fhead2{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+  li.finding .fhead2 .sev{margin:0}
+  .fdetail{margin:.45rem 0 0;font-size:.88rem;line-height:1.55}
+  .fsug{margin-top:.5rem;font-size:.85rem;color:var(--ok);background:var(--ok-bg);
+    border-radius:8px;padding:.4rem .6rem;display:flex;gap:.4rem;align-items:baseline}
 
   /* buttons */
   button,a.btn{font:inherit;font-size:.88rem;font-weight:600;padding:.45rem 1.05rem;border:0;
@@ -1339,8 +1529,9 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
 
   @media(prefers-color-scheme:dark){
     .tag-pr{background:#2c2150;color:#c4a5ff}
-    .chip.st-superseded,.sev-question{background:#3a2e08;color:#e3b341}
-    .sev-blocker{background:#3a1a18;color:#f47067} .sev-suggestion{background:#182236;color:#79a8ff}
+    .chip.st-superseded,.sev-question,.sev-medium{background:#3a2e08;color:#e3b341}
+    .sev-blocker,.sev-high{background:#3a1a18;color:#f47067} .sev-suggestion{background:#182236;color:#79a8ff}
+    .sev-critical{background:#4d1010;color:#ff9191}
     pre.code .hl{background:#3f2e00}
     .da{background:#12261e} .dd{background:#2b1719} .dh{color:#a371f7}
   }
