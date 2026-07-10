@@ -147,6 +147,10 @@ const EN: Record<string, string> = {
   "未同步": "Not synced yet",
   "查看完整历史": "Full history",
   "作者": "OP",
+  "原始": "Original",
+  "正在生成译文，页面会自动刷新…": "Generating the translation — this page refreshes automatically…",
+  "重新生成": "Re-judge",
+  "重新判定中…": "Re-judging…",
   "确定要将勾选的审查意见提交到 GitHub 吗？": "Submit the selected review points to GitHub?",
   "在 GitHub 查看这次 review": "View this review on GitHub",
   "状态": "status",
@@ -186,7 +190,7 @@ function outgoingLabel(editable = false): string {
 
 const REPLY_RE = /^\/reply\/([A-Za-z0-9_-]+)\/?$/;
 const REVIEW_RE = /^\/review\/([A-Za-z0-9_-]+)\/?$/;
-const CARD_ACTION_RE = /^\/card\/([A-Za-z0-9_-]+)\/(reply|act|ignore|restore)\/?$/;
+const CARD_ACTION_RE = /^\/card\/([A-Za-z0-9_-]+)\/(reply|act|ignore|restore|rejudge)\/?$/;
 const REPO_PAGE_RE = /^\/repo\/([^/]+)\/([^/]+)\/?$/;
 const REPO_ANALYZE_RE = /^\/repo\/([^/]+)\/([^/]+)\/analyze\/?$/;
 const REPO_SYNC_RE = /^\/repo\/([^/]+)\/([^/]+)\/sync\/?$/;
@@ -248,7 +252,7 @@ export function startHttpServer(
         const view = url.searchParams.get("view") === "done" ? "done" : "open";
         const repoFilter = url.searchParams.get("repo") ?? undefined;
         const pageNum = Math.max(1, parseInt(url.searchParams.get("p") ?? "1", 10) || 1);
-        return send(res, 200, renderInbox(store, view, repoFilter, pageNum));
+        return send(res, 200, renderInbox(store, engine, view, repoFilter, pageNum));
       }
 
       if (req.method === "GET" && path === "/logs") {
@@ -321,6 +325,7 @@ export function startHttpServer(
           200,
           renderItemPage(
             store,
+            engine,
             decodeURIComponent(itemPage[1]),
             decodeURIComponent(itemPage[2]),
             parseInt(itemPage[3], 10),
@@ -525,6 +530,7 @@ const DONE_PAGE_SIZE = 50;
 
 function renderInbox(
   store: Store,
+  engine: TriageEngine,
   view: "open" | "done",
   repoFilter?: string,
   pageNum = 1,
@@ -573,7 +579,7 @@ function renderInbox(
   }
 
   const open = store.listOpen().filter(inRepo);
-  const cards = open.map((p) => renderInboxCard(store, p)).join("");
+  const cards = open.map((p) => renderInboxCard(store, engine, p)).join("");
 
 
   // Repo management lives on the settings page; the inbox only shows cards.
@@ -625,7 +631,13 @@ function renderArchiveRow(it: ArchiveItem): string {
 
 // ---- archived item detail page (metadata + conversation timeline) ----
 
-function renderItemPage(store: Store, owner: string, repo: string, number: number): string {
+function renderItemPage(
+  store: Store,
+  engine: TriageEngine,
+  owner: string,
+  repo: string,
+  number: number,
+): string {
   const key = `${owner}/${repo}`;
   const side = renderSidebar(store, { view: "done", repo: key });
   const it =
@@ -656,6 +668,18 @@ function renderItemPage(store: Store, owner: string, repo: string, number: numbe
     (it.ghClosedAt ? ` · ${t("关闭于")} ${esc(fmtWhen(Date.parse(it.ghClosedAt)))}` : "") +
     `</span>`;
 
+  // On-demand translation: first view of an untranslated item kicks ONE cached
+  // translation into the display language; afterwards the tabs swap instantly.
+  const hasTr = itemHasTr(it);
+  const translating = engine.isTranslatingItem(owner, repo, number);
+  if (!hasTr && !translating && engine.configured && it.trLang !== LANGS.display) {
+    engine.translateItem(owner, repo, it.itemType, number).catch(() => {});
+  }
+  const trNote =
+    !hasTr && engine.configured
+      ? `<p class="meta">${t("正在生成译文，页面会自动刷新…")}</p>`
+      : "";
+
   const entryLi = (e: {
     kind: string;
     author: string;
@@ -665,11 +689,12 @@ function renderItemPage(store: Store, owner: string, repo: string, number: numbe
     path?: string;
     line?: number | null;
     diffHunk?: string;
+    bodyTr?: string;
   }): string =>
     `<li class="${userColorClass(e.author)}">
       ${tlHead(e.author, it.author, e, e.createdAt)}
       ${tlHunk(e)}
-      ${e.body.trim() ? `<div class="tlbody md">${mdToHtml(e.body)}</div>` : ""}</li>`;
+      ${dualBody(e.body, e.bodyTr)}</li>`;
 
   const timeline = it.timeline.length
     ? `<h2>${t("评论时间线")} (${it.timeline.length})</h2><ul class="tl">${it.timeline.map(entryLi).join("")}</ul>`
@@ -683,9 +708,12 @@ function renderItemPage(store: Store, owner: string, repo: string, number: numbe
        <a class="ext" href="${esc(it.htmlUrl)}" target="_blank" rel="noopener">${t("在 GitHub 打开")} ${icon("ext", 12)}</a></div>
      <h1>${esc(it.title)}</h1>
      <p class="meta">${esc(it.author)} · ${dates} ${labels}</p>
-     ${it.body.trim() ? `<div class="panel"><div class="tlbody md">${mdToHtml(it.body)}</div></div>` : ""}
-     ${timeline}`,
-    { side },
+     <div class="cardhist hview" data-hv="${hasTr ? "tr" : "orig"}">
+       ${hasTr ? histTabs(it.trLang!) : trNote}
+       ${it.body.trim() ? `<div class="panel">${dualBody(it.body, it.bodyTr ?? undefined)}</div>` : ""}
+       ${timeline}
+     </div>`,
+    { side, refreshSeconds: !hasTr && engine.configured ? 10 : undefined },
   );
 }
 
@@ -1086,33 +1114,37 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(buf);
 }
 
-function renderInboxCard(store: Store, p: PendingDecision): string {
+function renderInboxCard(store: Store, engine: TriageEngine, p: PendingDecision): string {
   const d = p.decision;
   const conf = Math.round(d.confidence * 100);
   const tok = `<input type="hidden" name="token" value="${esc(p.token)}">`;
   const ignoreForm = `<form method="post" action="/card/${p.id}/ignore" class="inline">${tok}<button class="ghost">${icon("ban", 14)} ${t("忽略")}</button></form>`;
+  const rejudging = engine.isRejudging(p.owner, p.repo, p.number);
+  const rejudgeForm = rejudging
+    ? `<button class="ghost" disabled>${icon("clock", 14)} ${t("重新判定中…")}</button>`
+    : `<form method="post" action="/card/${p.id}/rejudge" class="inline">${tok}<button class="ghost">${icon("refresh", 14)} ${t("重新生成")}</button></form>`;
 
   let body: string;
   if (d.needsReply && p.itemType === "pull_request") {
     const url = `/review/${p.id}?t=${encodeURIComponent(p.token)}`;
     const n = d.reviewPoints.length;
     const countLine = UI === "en" ? `<b>${n}</b> review point${n === 1 ? "" : "s"}` : `PR 审查意见 <b>${n}</b> 条`;
-    body = `<p>${icon("search", 14)} ${countLine}</p>
-      <div class="actions"><a class="btn" href="${url}">${icon("search", 14)} ${t("逐条审核并提交")}</a>${ignoreForm}</div>`;
+    body = `<p>${icon("search", 14)} ${countLine} <span class="meta">${confLabel(conf)}</span></p>
+      <div class="actions"><a class="btn" href="${url}">${icon("search", 14)} ${t("逐条审核并提交")}</a>${rejudgeForm}${ignoreForm}</div>`;
   } else if (d.needsReply) {
     const preview = displayText(d.draftReplyZh, d.draftReply);
     const outgoing = postText(d.draftReplyZh, d.draftReply);
-    body = `<details><summary>${icon("msg", 14)} ${t("草稿回复（点开审阅/编辑）")}</summary>
+    body = `<details><summary>${icon("msg", 14)} ${t("草稿回复（点开审阅/编辑）")} <span class="meta">${confLabel(conf)}</span></summary>
       <div class="draft">
         ${langTabs()}
-        <div class="lang-zh"><p class="meta">${previewLabel()}</p><pre>${esc(preview)}</pre></div>
+        <div class="lang-zh"><p class="meta">${previewLabel()}</p><div class="panel md">${mdToHtml(preview)}</div></div>
         <form method="post" action="/card/${p.id}/reply" onsubmit="return confirm('${esc(t("确定要将这条回复发布到 GitHub 吗？"))}')">${tok}
           <div class="lang-en"><p class="meta">${outgoingLabel(true)}</p>
             <textarea name="body" rows="6">${esc(outgoing)}</textarea></div>
           <div class="actions"><button>${icon("check", 14)} ${t("批准并回复")}</button></div>
         </form>
       </div></details>
-      <div class="actions">${ignoreForm}</div>`;
+      <div class="actions">${rejudgeForm}${ignoreForm}</div>`;
   } else {
     const label = ACTION_LABEL[d.suggestedAction];
     const labels =
@@ -1125,8 +1157,8 @@ function renderInboxCard(store: Store, p: PendingDecision): string {
         : `<form method="post" action="/card/${p.id}/act" class="inline" onsubmit="return confirm('${
             UI === "en" ? `Execute ${esc(t(label))} on GitHub?` : `确定要执行「${esc(label)}」吗？该操作将写入 GitHub。`
           }')">${tok}<button>${icon("check", 14)} ${UI === "en" ? `Execute "${esc(t(label))}"` : `执行「${esc(label)}」`}</button></form>`;
-    body = `<p>${icon("wrench", 14)} ${UI === "en" ? "Suggested action" : "建议动作"}: <b>${esc(t(label))}</b></p>${labels}
-      <div class="actions">${act}${ignoreForm}</div>`;
+    body = `<p>${icon("wrench", 14)} ${UI === "en" ? "Suggested action" : "建议动作"}: <b>${esc(t(label))}</b> <span class="meta">${confLabel(conf)}</span></p>${labels}
+      <div class="actions">${act}${rejudgeForm}${ignoreForm}</div>`;
   }
 
   const tag =
@@ -1137,7 +1169,7 @@ function renderInboxCard(store: Store, p: PendingDecision): string {
     <div class="cardhead">${tag}<b>${esc(p.owner)}/${esc(p.repo)}</b><span>#${p.number}</span>
       <a class="ext" href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">${t("在 GitHub 打开")} ${icon("ext", 12)}</a></div>
     <div class="title">${esc(clip(p.title, 200))}</div>
-    <div class="reasoning">${icon("spark", 14)} ${esc(clip(displayText(d.reasoning, d.reasoningEn), 600))} <span class="meta">${confLabel(conf)}</span></div>
+    <div class="reasoning md">${mdToHtml(clipMd(displayText(d.reasoning, d.reasoningEn), 600))}</div>
     ${body}
     ${renderCardHistory(store, p)}
   </div>`;
@@ -1177,6 +1209,25 @@ function tlHunk(e: { diffHunk?: string }): string {
   return `<pre class="code tlhunk">${rows}</pre>`;
 }
 
+/** Original + cached translation side by side; the 原始/译文 tabs toggle visibility. */
+function dualBody(orig: string, tr?: string, max?: number): string {
+  const cut = (x: string): string => (max ? clipMd(x, max) : x);
+  if (!orig.trim()) return "";
+  if (!tr?.trim()) return `<div class="tlbody md">${mdToHtml(cut(orig))}</div>`;
+  return `<div class="tlbody md h-tr">${mdToHtml(cut(tr))}</div>
+    <div class="tlbody md h-orig">${mdToHtml(cut(orig))}</div>`;
+}
+
+function itemHasTr(it: ArchiveItem): boolean {
+  return !!it.trLang && (!!it.bodyTr?.trim() || it.timeline.some((e) => e.bodyTr?.trim()));
+}
+
+function histTabs(trLang: string): string {
+  return `<div class="tabs htabs">
+    <button type="button" data-h="tr" class="active" onclick="setHistView(this,'tr')">${esc(trLang)}</button>
+    <button type="button" data-h="orig" onclick="setHistView(this,'orig')">${t("原始")}</button></div>`;
+}
+
 /** Collapsed conversation history under a pending card (from the local archive). */
 const CARD_HISTORY_MAX = 20;
 function renderCardHistory(store: Store, p: PendingDecision): string {
@@ -1186,24 +1237,28 @@ function renderCardHistory(store: Store, p: PendingDecision): string {
     return `<details class="cardhist"><summary>${icon("clock", 14)} ${t("历史")}</summary>
       <p class="meta">${t("该条目尚未同步到本地档案")}</p></details>`;
   }
+  const dual = (orig: string, tr?: string): string => dualBody(orig, tr, 600);
+  const hasTr = itemHasTr(it);
+  const htabs = hasTr ? histTabs(it.trLang!) : "";
+
   // Opening post first, then the most recent comments/reviews.
   const opening = `<li class="${userColorClass(it.author)}">${tlHead(it.author, it.author, undefined, it.ghCreatedAt)}
-    ${it.body.trim() ? `<div class="tlbody md">${mdToHtml(clipMd(it.body, 600))}</div>` : ""}</li>`;
+    ${dual(it.body, it.bodyTr ?? undefined)}</li>`;
   const recent = it.timeline.slice(-CARD_HISTORY_MAX);
   const entries = recent
     .map(
       (e) => `<li class="${userColorClass(e.author)}">${tlHead(e.author, it.author, e, e.createdAt)}
         ${tlHunk(e)}
-        ${e.body.trim() ? `<div class="tlbody md">${mdToHtml(clipMd(e.body, 600))}</div>` : ""}</li>`,
+        ${dual(e.body, e.bodyTr)}</li>`,
     )
     .join("");
   const more =
     it.timeline.length > CARD_HISTORY_MAX
       ? `<p class="meta"><a href="${itemUrl}">${t("查看完整历史")}（${it.timeline.length}）</a></p>`
       : "";
-  return `<details class="cardhist"><summary>${icon("clock", 14)} ${t("历史")}${
+  return `<details class="cardhist" data-hv="${hasTr ? "tr" : "orig"}"><summary>${icon("clock", 14)} ${t("历史")}${
     it.timeline.length ? ` (${it.timeline.length})` : ""
-  }</summary><ul class="tl">${opening}${entries}</ul>${more}</details>`;
+  }</summary>${htabs}<ul class="tl">${opening}${entries}</ul>${more}</details>`;
 }
 
 async function handleCardAction(
@@ -1226,6 +1281,10 @@ async function handleCardAction(
       engine.ignore(id);
     } else if (action === "restore") {
       engine.restore(id);
+    } else if (action === "rejudge") {
+      // Fire-and-forget: a judge run takes minutes; the card shows 判定中 and
+      // the fresh card supersedes this one when it lands.
+      engine.rejudge(id).catch(() => {});
     } else if (action === "act") {
       await engine.executeAction(id);
     } else {
@@ -1265,10 +1324,10 @@ function serveReply(store: Store, id: string, res: ServerResponse): void {
       `${p.owner}/${p.repo} #${p.number}`,
       `<h1><span class="tag ${p.itemType === "pull_request" ? "tag-pr" : "tag-issue"}">${typeLabel}</span> ${esc(p.owner)}/${esc(p.repo)} #${p.number}</h1>
        <p class="meta"><a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">${t("在 GitHub 打开")} ${icon("ext", 12)}</a> · <span class="chip st-${esc(p.status)}">${esc(t(STATUS_LABEL[p.status] ?? p.status))}</span></p>
-       <h2>${t("判断依据")}</h2><p>${esc(displayText(p.decision.reasoning, p.decision.reasoningEn))}</p>
+       <h2>${t("判断依据")}</h2><div class="md">${mdToHtml(displayText(p.decision.reasoning, p.decision.reasoningEn))}</div>
        ${langTabs()}
-       <div class="lang-zh"><h2>${previewLabel()}</h2><pre>${esc(zh)}</pre></div>
-       <div class="lang-en"><h2>${outgoingLabel()}</h2><pre>${esc(en)}</pre></div>`,
+       <div class="lang-zh"><h2>${previewLabel()}</h2><div class="panel md">${mdToHtml(zh)}</div></div>
+       <div class="lang-en"><h2>${outgoingLabel()}</h2><div class="panel md">${mdToHtml(en)}</div></div>`,
       { side: renderSidebar(store, { view: "open" }) },
     ),
   );
@@ -1306,8 +1365,8 @@ function renderReviewPage(p: PendingDecision, side: string): string {
         <label><input type="checkbox" name="pt" value="${i}" checked ${done ? "disabled" : ""}>
           <span class="sev sev-${esc(pt.severity)}">${esc(pt.severity)}</span>
           <code>${loc}</code>${warn}</label>
-        <div class="cmt lang-zh">${esc(displayText(pt.commentZh, pt.comment))}</div>
-        <div class="en lang-en">${esc(postText(pt.commentZh, pt.comment))}</div>
+        <div class="cmt lang-zh md">${mdToHtml(displayText(pt.commentZh, pt.comment))}</div>
+        <div class="en lang-en md">${mdToHtml(postText(pt.commentZh, pt.comment))}</div>
         ${pt.evidence ? `<div class="ev">${t("依据：")}${esc(pt.evidence)}</div>` : ""}
         ${code ? `<pre class="code">${code}</pre>` : ""}
       </li>`;
@@ -1315,13 +1374,13 @@ function renderReviewPage(p: PendingDecision, side: string): string {
     .join("");
 
   const list = `<ul class="pts">${items || `<li>${t("（无逐行意见，提交后仅发送总体意见正文）")}</li>`}</ul>`;
-  const zhBlock = `<div class="lang-zh"><h2>${t("总体意见")} · ${previewLabel()}</h2><pre>${esc(overallZh || overallEn || "(none)")}</pre></div>`;
+  const zhBlock = `<div class="lang-zh"><h2>${t("总体意见")} · ${previewLabel()}</h2><div class="panel md">${mdToHtml(overallZh || overallEn || "(none)")}</div></div>`;
   const handledNote = UI === "en"
     ? `This PR was already handled (status: ${esc(t(STATUS_LABEL[p.status] ?? p.status))}) — it cannot be resubmitted.`
     : `该 PR 已处理（状态：${esc(t(STATUS_LABEL[p.status] ?? p.status))}），无法再次提交。`;
   const inner = done
     ? `${langTabs()}${zhBlock}
-       <div class="lang-en"><h2>${t("总体意见")} · ${outgoingLabel()}</h2><pre>${esc(overallEn || "(none)")}</pre></div>
+       <div class="lang-en"><h2>${t("总体意见")} · ${outgoingLabel()}</h2><div class="panel md">${mdToHtml(overallEn || "(none)")}</div></div>
        <h2>${t("逐条审查意见")}</h2>${list}
        <p class="meta">${handledNote}</p>`
     : `${langTabs()}
@@ -1359,7 +1418,7 @@ function renderReviewPage(p: PendingDecision, side: string): string {
     `<h1><span class="tag tag-pr">PR</span> ${esc(p.owner)}/${esc(p.repo)} #${p.number}</h1>
      <p class="meta"><a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">${t("在 GitHub 打开")} ${icon("ext", 12)}</a> · <span class="chip st-${esc(p.status)}">${esc(t(STATUS_LABEL[p.status] ?? p.status))}</span></p>
      <h2>${icon("spark", 13)} ${t("判断依据")} ${confLabel(Math.round(d.confidence * 100))}</h2>
-     <div class="panel">${esc(displayText(d.reasoning, d.reasoningEn))}</div>
+     <div class="panel md">${mdToHtml(displayText(d.reasoning, d.reasoningEn))}</div>
      ${inner}
      ${diffSection}`,
     { side, wide: true },
@@ -1689,6 +1748,8 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
   .card .title{font-weight:650;font-size:1.02rem;margin:.35rem 0;line-height:1.45}
   .reasoning{background:var(--surface2);border-left:3px solid var(--accent);
     border-radius:0 8px 8px 0;padding:.55rem .8rem;margin:.65rem 0;font-size:.92rem}
+  .md p:first-child,.md .mdh:first-child{margin-top:0}
+  .md p:last-child,.md ul:last-child,.md ol:last-child{margin-bottom:0}
   a.ext{margin-left:auto;font-size:.82rem;text-decoration:none;white-space:nowrap}
   a.ext:hover{text-decoration:underline}
   .empty{background:var(--surface);border:1px dashed var(--border);border-radius:var(--r);
@@ -1753,6 +1814,9 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
   .cardhist summary{font-size:.85rem;font-weight:600;color:var(--muted)}
   .cardhist summary:hover{color:var(--text)}
   .cardhist .tl{margin-top:.6rem}
+  .cardhist .htabs{margin:.55rem 0 .1rem}
+  .cardhist[data-hv="tr"] .h-orig{display:none}
+  .cardhist[data-hv="orig"] .h-tr{display:none}
   .cardhist .tlbody{font-size:.84rem}
   ul.tl{list-style:none;padding:0;margin:0}
   ul.tl li{border-left:3px solid var(--border);border-radius:0 10px 10px 0;
@@ -1883,7 +1947,10 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
 </style></head><body${opts?.side ? ' class="withside"' : ""}>${opts?.side ?? ""}<main${opts?.wide ? ' class="wide"' : ""}>${inner}</main>
 <script>
 function setLang(l){document.documentElement.dataset.lang=l;
-  for(var b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.l===l);}
+  for(var b of document.querySelectorAll('.tabs button[data-l]')) b.classList.toggle('active', b.dataset.l===l);}
+function setHistView(btn,v){var c=btn.closest('.cardhist');if(!c)return;
+  c.dataset.hv=v;
+  for(var b of c.querySelectorAll('.htabs button')) b.classList.toggle('active', b.dataset.h===v);}
 function setRepoView(v){var w=document.querySelector('.rviews');if(!w)return;
   w.dataset.rview=v;
   for(var b of document.querySelectorAll('.rtabs button')) b.classList.toggle('active', b.dataset.v===v);}
@@ -1925,6 +1992,7 @@ const ICON_PATHS: Record<string, string> = {
   chev: '<path d="m6 9 6 6 6-6"/>',
   ban: '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/>',
+  refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
   save: '<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>',
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
   msg: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',

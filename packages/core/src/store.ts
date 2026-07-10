@@ -122,6 +122,8 @@ export class Store {
         gh_closed_at TEXT,
         gh_updated_at TEXT NOT NULL DEFAULT '',
         synced_at INTEGER NOT NULL,
+        tr_lang TEXT,                -- language the cached translation targets
+        body_tr TEXT,                -- translated opening body
         PRIMARY KEY (repo_key, item_type, number)
       );
       CREATE INDEX IF NOT EXISTS idx_archive_repo_state
@@ -139,6 +141,8 @@ export class Store {
     // Migrate DBs created before these columns existed.
     this.ensureColumn("pending", "token", "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn("pending", "context_json", "TEXT");
+    this.ensureColumn("archive_items", "tr_lang", "TEXT");
+    this.ensureColumn("archive_items", "body_tr", "TEXT");
   }
 
   private ensureColumn(table: string, column: string, type: string): void {
@@ -260,6 +264,31 @@ export class Store {
         record.context ? JSON.stringify(record.context) : null,
       );
     return record;
+  }
+
+  /**
+   * Overwrite a card in place with a fresh judgment (the re-judge button):
+   * same id/token, new decision/draft/context, bumped to the top as pending.
+   */
+  replacePending(
+    id: string,
+    input: Pick<PendingDecision, "title" | "htmlUrl" | "decision" | "draftReply" | "context">,
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE pending SET title = ?, html_url = ?, decision_json = ?,
+           draft_reply = ?, context_json = ?, status = 'pending', created_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        input.title,
+        input.htmlUrl,
+        JSON.stringify(input.decision),
+        input.draftReply,
+        input.context ? JSON.stringify(input.context) : null,
+        Date.now(),
+        id,
+      );
   }
 
   getPending(id: string): PendingDecision | null {
@@ -404,7 +433,8 @@ export class Store {
            labels_json = excluded.labels_json, body = excluded.body,
            timeline_json = excluded.timeline_json, comment_count = excluded.comment_count,
            gh_created_at = excluded.gh_created_at, gh_closed_at = excluded.gh_closed_at,
-           gh_updated_at = excluded.gh_updated_at, synced_at = excluded.synced_at`,
+           gh_updated_at = excluded.gh_updated_at, synced_at = excluded.synced_at,
+           tr_lang = NULL, body_tr = NULL`,
       )
       .run(
         item.repoKey,
@@ -459,6 +489,27 @@ export class Store {
       .prepare(`SELECT COUNT(*) AS n FROM archive_items WHERE ${where}`)
       .get(...args) as { n: number };
     return row.n;
+  }
+
+  /**
+   * Attach a cached translation to an archived item: which language it targets,
+   * the translated opening body, and the timeline rewritten with bodyTr fields.
+   * A later re-sync of the item resets these (content changed → stale).
+   */
+  setArchiveTranslation(
+    repoKey: string,
+    itemType: string,
+    number: number,
+    trLang: string,
+    bodyTr: string,
+    timeline: TimelineEntry[],
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE archive_items SET tr_lang = ?, body_tr = ?, timeline_json = ?
+         WHERE repo_key = ? AND item_type = ? AND number = ?`,
+      )
+      .run(trLang, bodyTr, JSON.stringify(timeline), repoKey, itemType, number);
   }
 
   getArchiveSync(repoKey: string): ArchiveSyncState | null {
@@ -529,6 +580,8 @@ export interface TimelineEntry {
   line?: number | null;
   /** review_comment only: the diff hunk the comment is anchored to (tail lines) */
   diffHunk?: string;
+  /** cached translation of body into the item's tr_lang */
+  bodyTr?: string;
 }
 
 /** A locally archived issue/PR: metadata + full conversation timeline. */
@@ -548,6 +601,9 @@ export interface ArchiveItem {
   ghCreatedAt: string;
   ghClosedAt: string | null;
   ghUpdatedAt: string;
+  /** language of the cached translations (bodyTr / timeline[].bodyTr), if any */
+  trLang?: string | null;
+  bodyTr?: string | null;
 }
 
 export interface ArchiveSyncState {
@@ -578,6 +634,8 @@ interface ArchiveRow {
   gh_closed_at: string | null;
   gh_updated_at: string;
   synced_at: number;
+  tr_lang: string | null;
+  body_tr: string | null;
 }
 
 function rowToArchive(row: ArchiveRow): ArchiveItem {
@@ -597,6 +655,8 @@ function rowToArchive(row: ArchiveRow): ArchiveItem {
     ghCreatedAt: row.gh_created_at,
     ghClosedAt: row.gh_closed_at,
     ghUpdatedAt: row.gh_updated_at,
+    trLang: row.tr_lang,
+    bodyTr: row.body_tr,
   };
 }
 

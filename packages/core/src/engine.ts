@@ -1,11 +1,12 @@
 import { EventEmitter } from "node:events";
 import type { AppConfig } from "./config.ts";
 import { Store, type PendingDecision, type PendingStatus } from "./store.ts";
-import { pollRepo } from "./github/poller.ts";
+import { pollRepo, fetchItem } from "./github/poller.ts";
 import { configureGithub } from "./github/client.ts";
 import { judge } from "./judge/judge.ts";
 import { analyzeRepo } from "./judge/repo-analysis.ts";
 import { syncRepoArchive } from "./github/archive.ts";
+import { translateItemHistory } from "./judge/translate.ts";
 import { postReply, executeSuggestedAction } from "./github/actions.ts";
 import { itemKey } from "./types.ts";
 
@@ -145,6 +146,97 @@ export class TriageEngine extends EventEmitter<EngineEvents> {
     return this.finalize(id, "pending", "↩️ 已恢复为待处理");
   }
 
+  // ---- history translation (display-language copy of a card's conversation) ----
+
+  private translating = new Set<string>();
+
+  /** Is a translation currently running for this item (any target language)? */
+  isTranslatingItem(owner: string, repo: string, number: number): boolean {
+    const prefix = `${owner}/${repo}#${number}:`;
+    for (const k of this.translating) if (k.startsWith(prefix)) return true;
+    return false;
+  }
+
+  /** Translate an item's archived conversation into the display language, once. */
+  async translateItem(
+    owner: string,
+    repo: string,
+    itemType: "issue" | "pull_request",
+    number: number,
+  ): Promise<void> {
+    if (!this.app) return;
+    const lang = this.app.display_language;
+    const k = `${owner}/${repo}#${number}:${lang}`;
+    if (this.translating.has(k)) return;
+    this.translating.add(k);
+    try {
+      await translateItemHistory(this.store, owner, repo, itemType, number, lang, this.app.model);
+    } catch (e) {
+      console.warn(`[translate] ${k} failed:`, (e as Error).message);
+    } finally {
+      this.translating.delete(k);
+    }
+  }
+
+  /** Every open card whose archived history lacks a current-language translation. */
+  private sweepHistoryTranslations(): void {
+    if (!this.app) return;
+    for (const p of this.store.listOpen()) {
+      const it = this.store.getArchiveItem(`${p.owner}/${p.repo}`, p.itemType, p.number);
+      if (it && it.trLang !== this.app.display_language) {
+        void this.translateItem(p.owner, p.repo, p.itemType, p.number);
+      }
+    }
+  }
+
+  // ---- re-judge (refetch the item fresh, run the judge again) ----
+
+  private rejudging = new Set<string>();
+
+  isRejudging(owner: string, repo: string, number: number): boolean {
+    return this.rejudging.has(`${owner}/${repo}#${number}`);
+  }
+
+  /**
+   * Refetch the card's item from GitHub (current body/comments/diff) and judge
+   * it again; the fresh card supersedes this one. Fire-and-forget from the UI —
+   * a judge run takes minutes; isRejudging() lets the page show progress.
+   */
+  async rejudge(id: string): Promise<void> {
+    if (!this.app) throw new Error("引擎未配置");
+    const p = this.mustBeOpen(id);
+    const key = `${p.owner}/${p.repo}#${p.number}`;
+    if (this.rejudging.has(key)) return;
+    this.rejudging.add(key);
+    try {
+      const item = await fetchItem(p.owner, p.repo, p.number);
+      const decision = await judge(item, this.app.model);
+      // Overwrite the SAME card (id/token unchanged) — a re-judge is a refresh,
+      // not new activity, so nothing gets archived as superseded. Skip if the
+      // human handled the card while the judge was running.
+      const cur = this.store.getPending(id);
+      if (!cur || (cur.status !== "pending" && cur.status !== "awaiting_edit")) {
+        console.log(`[rejudge] ${key} finished but the card was handled meanwhile — dropped`);
+        return;
+      }
+      this.store.replacePending(id, {
+        title: item.title,
+        htmlUrl: item.htmlUrl,
+        decision,
+        draftReply: decision.draftReply ?? null,
+        context:
+          item.itemType === "pull_request" && item.files ? { files: item.files } : null,
+      });
+      const updated = this.store.getPending(id);
+      if (updated) this.emit("card", updated);
+      console.log(`[rejudge] ${key} done (needsReply=${decision.needsReply})`);
+    } catch (e) {
+      console.error(`[rejudge] ${key} failed:`, (e as Error).message);
+    } finally {
+      this.rejudging.delete(key);
+    }
+  }
+
   // ---- whole-repo analysis (read-only; never writes to GitHub) ----
 
   private analysisRunning = new Set<string>();
@@ -196,6 +288,9 @@ export class TriageEngine extends EventEmitter<EngineEvents> {
           this.finalize(stale.id, "superseded", "🔒 该 issue/PR 已在 GitHub 上关闭，已归档");
         }
       }
+      // Freshly (re)synced items reset their cached translation — restore it
+      // for whatever still has an open card.
+      this.sweepHistoryTranslations();
     } finally {
       this.archiveRunning.delete(key);
     }
@@ -234,6 +329,14 @@ export class TriageEngine extends EventEmitter<EngineEvents> {
     const app = this.app;
     this.emit("cycle", { phase: "start" });
     console.log(`[poll] starting cycle over ${app.repos.length} repo(s)`);
+
+    // History-archive sync is independent of judging and runs concurrently —
+    // judging a queue of items takes minutes each, and the archive (and its
+    // translations) must not wait behind that.
+    for (const rc of app.repos) {
+      void this.runArchiveSync(rc.owner, rc.repo);
+    }
+
     for (const rc of app.repos) {
       const repoKey = `${rc.owner}/${rc.repo}`;
       try {
@@ -303,13 +406,8 @@ export class TriageEngine extends EventEmitter<EngineEvents> {
 
     this.emit("cycle", { phase: "done" });
     console.log("[poll] cycle done");
-
-    // Keep the local history archive in step, off the cycle's critical path:
-    // first run backfills everything (resumable), later runs are cheap
-    // incremental pulls from the per-repo cursor.
-    for (const rc of app.repos) {
-      void this.runArchiveSync(rc.owner, rc.repo);
-    }
+    // Catch anything judged this cycle whose history landed meanwhile.
+    this.sweepHistoryTranslations();
   }
 }
 

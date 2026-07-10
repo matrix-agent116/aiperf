@@ -133,7 +133,39 @@ export async function pollRepo(
   return { items, maxSeen: maxUpdatedAt };
 }
 
-async function fetchRecentComments(rc: RepoConfig, number: number) {
+/**
+ * Fetch ONE item fresh from GitHub as a judgeable TriageItem (the re-judge
+ * button): current body/comments, and for a PR the current diff + head sha.
+ */
+export async function fetchItem(
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<TriageItem> {
+  const gh = getOctokit();
+  const rc = { owner, repo };
+  const { data: issue } = await gh.rest.issues.get({ owner, repo, issue_number: number });
+  const isPR = !!issue.pull_request;
+  const base: TriageItem = {
+    owner,
+    repo,
+    itemType: isPR ? "pull_request" : "issue",
+    number,
+    title: issue.title,
+    body: truncate(issue.body ?? "", MAX_BODY),
+    author: issue.user?.login ?? "unknown",
+    htmlUrl: issue.html_url,
+    createdAt: issue.created_at,
+    updatedAt: issue.updated_at,
+    state: issue.state,
+    labels: (issue.labels ?? []).map((l) => (typeof l === "string" ? l : (l.name ?? ""))),
+    comments: await fetchRecentComments(rc, number),
+  };
+  if (isPR) Object.assign(base, await fetchPrDetails(rc, number));
+  return base;
+}
+
+async function fetchRecentComments(rc: { owner: string; repo: string }, number: number) {
   const gh = getOctokit();
   const { data } = await gh.rest.issues.listComments({
     owner: rc.owner,
@@ -232,7 +264,7 @@ async function fetchLatestCommitDate(rc: RepoConfig, number: number): Promise<st
 }
 
 async function fetchPrDetails(
-  rc: RepoConfig,
+  rc: { owner: string; repo: string },
   number: number,
 ): Promise<Partial<TriageItem>> {
   const gh = getOctokit();
