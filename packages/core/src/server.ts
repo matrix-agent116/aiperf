@@ -143,6 +143,8 @@ const EN: Record<string, string> = {
   "同步历史": "Sync history",
   "同步中…": "Syncing…",
   "同步中断，将自动续跑": "Sync interrupted — will resume automatically",
+  "已同步": "Synced",
+  "未同步": "Not synced yet",
   "查看完整历史": "Full history",
   "作者": "OP",
   "确定要将勾选的审查意见提交到 GitHub 吗？": "Submit the selected review points to GitHub?",
@@ -434,11 +436,20 @@ function renderSidebar(
   const item = (
     href: string,
     label: string,
-    opts: { count?: number; hot?: boolean; sub?: boolean; on?: boolean; icon?: string },
+    opts: {
+      count?: number;
+      hot?: boolean;
+      sub?: boolean;
+      on?: boolean;
+      icon?: string;
+      /** trailing status dot html (archive sync state) */
+      dot?: string;
+      title?: string;
+    },
   ): string =>
-    `<a href="${esc(href)}" class="${opts.sub ? "sub" : ""}${opts.on ? " active" : ""}">
+    `<a href="${esc(href)}" class="${opts.sub ? "sub" : ""}${opts.on ? " active" : ""}"${opts.title ? ` title="${esc(opts.title)}"` : ""}>
       ${opts.icon ? `<span class="ic">${opts.icon}</span>` : ""}<span class="lbl">${esc(label)}</span>
-      ${opts.count ? `<span class="scount${opts.hot ? " hot" : ""}">${opts.count}</span>` : ""}
+      ${opts.count ? `<span class="scount${opts.hot ? " hot" : ""}">${opts.count}</span>` : ""}${opts.dot ?? ""}
     </a>`;
 
   const folder = (view: "open" | "done", iconHtml: string, label: string, total: number): string => {
@@ -468,13 +479,26 @@ function renderSidebar(
     </div>`;
   };
 
-  // Per-repo analysis pages (architecture map + security scan).
+  // Per-repo analysis pages (architecture map + security scan), with the
+  // history-archive sync state as a trailing status dot.
   const repoLinks = keys
     .map((k) => {
       const [o, r] = k.split("/");
+      const sync = store.getArchiveSync(k);
+      const st = sync?.status ?? "none";
+      const title =
+        st === "running"
+          ? `${t("同步中…")}（${sync?.synced ?? 0}）`
+          : st === "done"
+            ? `${t("已同步")} ${sync?.synced ?? 0}`
+            : st === "error"
+              ? t("同步中断，将自动续跑")
+              : t("未同步");
       return item(`/repo/${encodeURIComponent(o)}/${encodeURIComponent(r)}`, k, {
         icon: icon("repo"),
         on: active.view === "repo" && active.repo === k,
+        dot: `<span class="sdot ${esc(st)}"></span>`,
+        title,
       });
     })
     .join("");
@@ -1603,6 +1627,13 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
   .sfolder.closed .fkids{display:none}
   .shead{font-size:.68rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
     color:var(--side-muted);opacity:.75;padding:.2rem .6rem .35rem}
+  .sdot{width:.48rem;height:.48rem;border-radius:50%;flex:none;margin-left:auto}
+  .scount+.sdot{margin-left:.4rem}
+  .sdot.done{background:#3fce6f;opacity:.75}
+  .sdot.running{background:var(--accent);animation:sdotpulse 1.2s ease-in-out infinite}
+  .sdot.error{background:var(--danger)}
+  .sdot.none{background:var(--side-muted);opacity:.35}
+  @keyframes sdotpulse{50%{opacity:.3}}
   @media(max-width:760px){.side{display:none}body.withside main{margin-left:0}}
 
   /* logs */
