@@ -512,10 +512,6 @@ function renderSettingsPage(store: Store, engine: TriageEngine): string {
          <input id="s-interval" type="number" min="1" value="${v(raw.poll_interval_minutes, "5")}"></label>
        <label class="field">首次回看天数
          <input id="s-lookback" type="number" min="1" value="${v(raw.lookback_days_on_first_run, "7")}"></label>
-       <label class="field">提醒间隔（小时，0 关闭）
-         <input id="s-remind" type="number" min="0" value="${v(raw.reminder_after_hours, "24")}"></label>
-       <label class="field">本地端口（0 = 自动分配，避免冲突；重启后生效）
-         <input id="s-port" type="number" min="0" value="${v(raw.http?.port, "0")}"></label>
      </div>
 
      <h2>📦 仓库</h2>
@@ -553,8 +549,6 @@ function renderSettingsPage(store: Store, engine: TriageEngine): string {
          model:document.getElementById('s-model').value.trim(),
          poll_interval_minutes:Number(document.getElementById('s-interval').value),
          lookback_days_on_first_run:Number(document.getElementById('s-lookback').value),
-         reminder_after_hours:Number(document.getElementById('s-remind').value),
-         http:{port:Number(document.getElementById('s-port').value)},
          repos:repos
        };
      }

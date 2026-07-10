@@ -26,16 +26,6 @@ export const SettingsSchema = z.object({
   poll_interval_minutes: z.number().positive().default(5),
   model: z.string().default("claude-opus-4-8"),
   lookback_days_on_first_run: z.number().positive().default(7),
-  reminder_after_hours: z.number().nonnegative().default(24), // 0 disables reminders
-  // Local HTTP service that serves the app pages. 0 (default) = auto-assign a free
-  // port on each start (no conflicts possible; the shell learns the actual port).
-  // Pin a port only for stable headless bookmarks. Changes apply on restart; a
-  // pinned port that's taken falls back to auto.
-  http: z
-    .object({
-      port: z.number().int().nonnegative().default(0),
-    })
-    .default({}),
   // Empty is allowed: the setup wizard configures tokens/model only, and repos are
   // added later from the Inbox page (a cycle over zero repos is just a no-op).
   repos: z.array(RepoConfigSchema).default([]),
@@ -50,8 +40,6 @@ export type RepoConfig = z.infer<typeof RepoConfigSchema> & {
 export type AppConfig = Omit<Settings, "repos"> & {
   repos: RepoConfig[];
 };
-
-export const DEFAULT_PORT = 8787;
 
 /** github.com/owner/repo -> { owner, repo } */
 function parseRepoUrl(url: string): { owner: string; repo: string } {

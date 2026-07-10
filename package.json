@@ -1,6 +1,6 @@
 {
   "name": "gh-triage-agent",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "配置驱动多仓库轮询 + 人在环路的 GitHub Issue/PR 判定 Agent（Claude Agent SDK + 桌面 App）",
   "private": true,
   "type": "module",

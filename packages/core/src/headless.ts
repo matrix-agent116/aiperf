@@ -23,7 +23,6 @@ async function main(): Promise<void> {
     console.log(`[card] ${itemKey(p)} awaiting confirmation (${p.title.slice(0, 60)})`),
   );
   engine.on("finalized", (ev) => console.log(`[card] ${ev.id} → ${ev.status}`));
-  engine.on("reminder", (p) => console.log(`[remind] ${itemKey(p)} still open`));
 
   const stored = store.getSettingsRaw();
   const parsed = stored ? parseSettings(stored) : null;
@@ -44,9 +43,8 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  // Headless default stays 0 (auto) too; pin http.port in settings if you want a
-  // stable bookmarkable URL. The actual port is always printed below.
-  const port = await startHttpServer(store, engine, config?.http.port ?? 0, {
+  // Port 0 = auto-assigned; the actual URL is always printed below.
+  const port = await startHttpServer(store, engine, 0, {
     onSettingsChanged: (cfg) => {
       engine.setConfig(cfg);
       engine.start();

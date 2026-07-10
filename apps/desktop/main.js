@@ -100,12 +100,6 @@ function startCore() {
         notify(`📥 ${c.repo} ${kind} #${c.number}`, `${c.title}\n${c.reasoning}`);
         break;
       }
-      case "reminder": {
-        const c = msg.card;
-        const kind = c.itemType === "pull_request" ? "PR" : "Issue";
-        notify(`⏰ 卡片待处理`, `${c.repo} ${kind} #${c.number} 还没处理`);
-        break;
-      }
     }
   });
 

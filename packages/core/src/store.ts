@@ -23,11 +23,8 @@ export interface PendingDecision {
   title: string;
   decision: Decision;
   draftReply: string | null;
-  /** Non-null once the card has been surfaced to the human (reminders key off this) */
-  messageId: number | null;
   status: PendingStatus;
   createdAt: number;
-  remindedAt: number | null;
   /** secret in the review-page URL; whoever has it can view + submit */
   token: string;
   /** PR only: persisted patches for rendering the review page */
@@ -45,10 +42,8 @@ interface PendingRow {
   decision_json: string;
   draft_reply: string | null;
   chat_id: string;
-  message_id: number | null;
   status: string;
   created_at: number;
-  reminded_at: number | null;
   token: string;
   context_json: string | null;
 }
@@ -57,7 +52,7 @@ interface PendingRow {
 // reading/parsing context_json on every background sweep. NULL AS context_json keeps
 // rowToPending happy (it maps to context: null).
 const COLS_NO_CTX =
-  "id, owner, repo, item_type, number, html_url, title, decision_json, draft_reply, chat_id, message_id, status, created_at, reminded_at, token, NULL AS context_json";
+  "id, owner, repo, item_type, number, html_url, title, decision_json, draft_reply, chat_id, status, created_at, token, NULL AS context_json";
 
 /**
  * Persistence:
@@ -96,16 +91,15 @@ export class Store {
         decision_json TEXT NOT NULL,
         draft_reply TEXT,
         chat_id TEXT NOT NULL,
-        message_id INTEGER,
+        message_id INTEGER,   -- legacy (Telegram-era delivery marker), unused
         status TEXT NOT NULL,
         created_at INTEGER NOT NULL,
-        reminded_at INTEGER,
+        reminded_at INTEGER,  -- legacy (removed reminder feature), unused
         token TEXT NOT NULL DEFAULT '',
         context_json TEXT
       );
     `);
     // Migrate DBs created before these columns existed.
-    this.ensureColumn("pending", "reminded_at", "INTEGER");
     this.ensureColumn("pending", "token", "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn("pending", "context_json", "TEXT");
   }
@@ -192,28 +186,23 @@ export class Store {
 
   // ---- pending decisions ----
   createPending(
-    input: Omit<
-      PendingDecision,
-      "id" | "messageId" | "status" | "createdAt" | "remindedAt" | "token"
-    >,
+    input: Omit<PendingDecision, "id" | "status" | "createdAt" | "token">,
   ): PendingDecision {
     const id = randomBytes(6).toString("base64url"); // short, URL-friendly
     const record: PendingDecision = {
       ...input,
       id,
       token: randomBytes(12).toString("base64url"), // review-page secret
-      messageId: null,
       status: "pending",
       createdAt: Date.now(),
-      remindedAt: null,
     };
     this.db
       .prepare(
         `INSERT INTO pending
            (id, owner, repo, item_type, number, html_url, title,
-            decision_json, draft_reply, chat_id, message_id, status, created_at,
+            decision_json, draft_reply, chat_id, status, created_at,
             token, context_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.id,
@@ -227,7 +216,6 @@ export class Store {
         record.draftReply,
         // chat_id survives as a legacy NOT NULL column from the Telegram era
         "",
-        record.messageId,
         record.status,
         record.createdAt,
         record.token,
@@ -241,12 +229,6 @@ export class Store {
       .prepare("SELECT * FROM pending WHERE id = ?")
       .get(id) as PendingRow | undefined;
     return row ? rowToPending(row) : null;
-  }
-
-  setPendingMessageId(id: string, messageId: number): void {
-    this.db
-      .prepare("UPDATE pending SET message_id = ? WHERE id = ?")
-      .run(messageId, id);
   }
 
   setPendingStatus(id: string, status: PendingStatus): void {
@@ -278,29 +260,6 @@ export class Store {
       )
       .all(owner, repo, itemType, number, exceptId) as unknown as PendingRow[];
     return rows.map(rowToPending);
-  }
-
-  /**
-   * Shown cards still open (pending / awaiting_edit) whose last reminder — or
-   * creation, if never reminded — is older than `beforeMs`. Drives repeating
-   * nudges: re-fires every interval until the card is actioned.
-   */
-  findDueReminders(beforeMs: number): PendingDecision[] {
-    const rows = this.db
-      .prepare(
-        `SELECT ${COLS_NO_CTX} FROM pending
-         WHERE status IN ('pending', 'awaiting_edit')
-           AND message_id IS NOT NULL
-           AND COALESCE(reminded_at, created_at) < ?`,
-      )
-      .all(beforeMs) as unknown as PendingRow[];
-    return rows.map(rowToPending);
-  }
-
-  markReminded(id: string): void {
-    this.db
-      .prepare("UPDATE pending SET reminded_at = ? WHERE id = ?")
-      .run(Date.now(), id);
   }
 
   /** Open cards (pending / awaiting_edit) awaiting the human, newest first. */
@@ -372,10 +331,8 @@ function rowToPending(row: PendingRow): PendingDecision {
     title: row.title,
     decision: JSON.parse(row.decision_json) as Decision,
     draftReply: row.draft_reply,
-    messageId: row.message_id,
     status: row.status as PendingStatus,
     createdAt: row.created_at,
-    remindedAt: row.reminded_at,
     token: row.token,
     context: row.context_json
       ? (JSON.parse(row.context_json) as PrContext)

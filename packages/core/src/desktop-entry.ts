@@ -13,7 +13,6 @@ initLogCapture();
  * no config files, no env vars. Talks to the main process over `process.parentPort`:
  *   → {type:"ready", port, configured}         server is up, load the window
  *   → {type:"card", card:{…}}                  fresh decision — show a notification
- *   → {type:"reminder", card:{…}}              stale card nudge
  *   → {type:"badge", count}                    open-card count for tray/dock badge
  *   ← {type:"pollNow"}                         tray menu / wake-from-sleep kick
  *   ← {type:"shutdown"}                        graceful exit
@@ -65,7 +64,6 @@ engine.on("card", (p) => {
   send({ type: "card", card: cardSummary(p) });
   sendBadge();
 });
-engine.on("reminder", (p) => send({ type: "reminder", card: cardSummary(p) }));
 engine.on("finalized", () => sendBadge());
 engine.on("cycle", ({ phase }) => {
   if (phase === "done") sendBadge();
@@ -90,9 +88,9 @@ if (parsed && !parsed.ok) {
 }
 const config = parsed && parsed.ok ? parsed.config : null;
 
-// 0 = OS-assigned free port (default): cannot conflict with another app; the
+// Port 0 = OS-assigned free port (always): cannot conflict with another app; the
 // shell learns the actual port from the ready message below.
-const port = await startHttpServer(store, engine, config?.http.port ?? 0, {
+const port = await startHttpServer(store, engine, 0, {
   onSettingsChanged: (cfg) => {
     engine.setConfig(cfg);
     engine.start(); // no-op if already running; setConfig restarted the timer if needed

@@ -20,8 +20,6 @@ interface EngineEvents {
   /** A fresh decision was judged and stored — show it to the human */
   card: [PendingDecision];
   finalized: [FinalizedEvent];
-  /** A card has been sitting un-actioned past the reminder threshold */
-  reminder: [PendingDecision];
   cycle: [{ phase: "start" | "done" }];
   /** Named pollError (not "error") so an unlistened emit doesn't throw per EventEmitter rules */
   pollError: [{ scope: string; message: string }];
@@ -190,9 +188,6 @@ export class TriageEngine extends EventEmitter<EngineEvents> {
                   ? { files: item.files }
                   : null,
             });
-            // messageId doubles as "shown to the human"; the local UI always shows
-            // cards immediately, so mark it at creation (reminders key off this).
-            this.store.setPendingMessageId(pending.id, 0);
             this.emit("card", pending);
             this.store.markProcessed(fingerprint); // only after a successful emit
 
@@ -227,21 +222,8 @@ export class TriageEngine extends EventEmitter<EngineEvents> {
       }
     }
 
-    this.remindStale();
     this.emit("cycle", { phase: "done" });
     console.log("[poll] cycle done");
-  }
-
-  /** Emit reminders for cards left un-actioned past the threshold (repeats every interval). */
-  private remindStale(): void {
-    if (!this.app?.reminder_after_hours) return; // unset or 0 disables
-    const before = Date.now() - this.app.reminder_after_hours * 3600_000;
-    const due = this.store.findDueReminders(before);
-    for (const p of due) {
-      this.emit("reminder", p);
-      this.store.markReminded(p.id);
-    }
-    if (due.length) console.log(`[remind] sent ${due.length} reminder(s)`);
   }
 }
 
