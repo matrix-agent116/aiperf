@@ -109,6 +109,8 @@ const EN: Record<string, string> = {
   "提交到 GitHub 失败": "Failed to submit to GitHub",
   "已提交": "Submitted",
   "已提交 PR Review": "PR review submitted",
+  "确定要将这条回复发布到 GitHub 吗？": "Post this reply to GitHub?",
+  "确定要将勾选的审查意见提交到 GitHub 吗？": "Submit the selected review points to GitHub?",
   "在 GitHub 查看这次 review": "View this review on GitHub",
   "状态": "status",
   "无效的 JSON": "Invalid JSON",
@@ -708,7 +710,7 @@ function renderInboxCard(p: PendingDecision): string {
       <div class="draft">
         ${langTabs()}
         <div class="lang-zh"><p class="meta">${previewLabel()}</p><pre>${esc(preview)}</pre></div>
-        <form method="post" action="/card/${p.id}/reply">${tok}
+        <form method="post" action="/card/${p.id}/reply" onsubmit="return confirm('${esc(t("确定要将这条回复发布到 GitHub 吗？"))}')">${tok}
           <div class="lang-en"><p class="meta">${outgoingLabel(true)}</p>
             <textarea name="body" rows="6">${esc(outgoing)}</textarea></div>
           <div class="actions"><button>${icon("check", 14)} ${t("批准并回复")}</button></div>
@@ -724,7 +726,9 @@ function renderInboxCard(p: PendingDecision): string {
     const act =
       d.suggestedAction === "none"
         ? ""
-        : `<form method="post" action="/card/${p.id}/act" class="inline">${tok}<button>${icon("check", 14)} ${UI === "en" ? `Execute "${esc(t(label))}"` : `执行「${esc(label)}」`}</button></form>`;
+        : `<form method="post" action="/card/${p.id}/act" class="inline" onsubmit="return confirm('${
+            UI === "en" ? `Execute ${esc(t(label))} on GitHub?` : `确定要执行「${esc(label)}」吗？该操作将写入 GitHub。`
+          }')">${tok}<button>${icon("check", 14)} ${UI === "en" ? `Execute "${esc(t(label))}"` : `执行「${esc(label)}」`}</button></form>`;
     body = `<p>${icon("wrench", 14)} ${UI === "en" ? "Suggested action" : "建议动作"}: <b>${esc(t(label))}</b></p>${labels}
       <div class="actions">${act}${ignoreForm}</div>`;
   }
@@ -859,7 +863,7 @@ function renderReviewPage(p: PendingDecision, side: string): string {
        <h2>${t("逐条审查意见")}</h2>${list}
        <p class="meta">${handledNote}</p>`
     : `${langTabs()}
-       <form method="post" action="/review/${p.id}?t=${encodeURIComponent(p.token)}">
+       <form method="post" action="/review/${p.id}?t=${encodeURIComponent(p.token)}" onsubmit="return confirm('${esc(t("确定要将勾选的审查意见提交到 GitHub 吗？"))}')">
         ${zhBlock}
         <div class="lang-en"><h2>${t("总体意见")} · ${outgoingLabel(true)}</h2>
           <textarea name="body" rows="6" placeholder="Leave empty to post no overall body">${esc(overallEn)}</textarea></div>
