@@ -170,7 +170,7 @@ export class TriageEngine extends EventEmitter<EngineEvents> {
         for (const item of items) {
           const fingerprint = `${itemKey(item)}@${item.updatedAt}`;
           try {
-            const decision = await judge(item, app.model);
+            const decision = await judge(item, app);
             const pending = this.store.createPending({
               owner: item.owner,
               repo: item.repo,

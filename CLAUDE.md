@@ -58,9 +58,14 @@ The engine marks an item's fingerprint (`itemKey@updatedAt`) processed **only af
 
 `judge/schema.ts` has two parallel definitions: zod `DecisionSchema` (validation incl. cross-field rules) and `DecisionJsonSchema` (JSON Schema for the SDK's `outputFormat`). Change both together. Validation failure feeds the zod error back to the model and retries once.
 
-### Bilingual convention
+### Language configuration
 
-Text posted to GitHub is **English** (`draftReply`, review point `comment`); parallel `*Zh` fields and `reasoning` are **Chinese, for the human only — never posted**. Keep this split for any new user-facing field.
+Three settings drive all language behavior (0.6.0; previously hardcoded English-posted/Chinese-displayed):
+- `ui_language` (`zh`|`en`) — interface language; server.ts renders strings through `t()`, whose `EN` map is keyed by the Chinese source string (unlisted strings fall back to Chinese). `applyUiPrefs(store)` sets module-level `UI`/`LANGS` at the top of every request.
+- `post_language` (free-form name, default `English`) — what actually gets POSTED to GitHub: `draftReply`, review point `comment`.
+- `display_language` (free-form name, default `中文`) — human-facing judge output: `reasoning`, `draftReplyZh`, `commentZh`. The `*Zh` field names are **legacy** — they hold whatever the display language is.
+
+`buildSystemPrompt(postLang, displayLang)` in `judge/prompt.ts` threads both into the judge. Keep the posted-vs-display split for any new user-facing field, and add new UI strings to the `EN` map.
 
 ### Performance conventions
 

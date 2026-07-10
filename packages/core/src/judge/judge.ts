@@ -1,7 +1,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { TriageItem } from "../types.ts";
 import { DecisionSchema, DecisionJsonSchema, type Decision } from "./schema.ts";
-import { SYSTEM_PROMPT, buildUserPrompt } from "./prompt.ts";
+import { buildSystemPrompt, buildUserPrompt } from "./prompt.ts";
 import { buildGithubReadTools, TOOL_SERVER } from "./tools.ts";
 import { preparePrCheckout } from "./checkout.ts";
 
@@ -48,7 +48,15 @@ interface RunResult {
  * We still run DecisionSchema.safeParse to enforce the cross-field rules JSON Schema
  * can't express; on a validation failure we feed the error back and retry once.
  */
-export async function judge(item: TriageItem, model: string): Promise<Decision> {
+export interface JudgeConfig {
+  model: string;
+  /** language of text POSTED to GitHub (draftReply, review comments) */
+  post_language: string;
+  /** language of the human-facing rendering (reasoning, draft previews) */
+  display_language: string;
+}
+
+export async function judge(item: TriageItem, cfg: JudgeConfig): Promise<Decision> {
   const env = await buildReadEnv(item);
   const userPrompt = buildUserPrompt(item, env.toolsHelp);
   let lastText = "";
@@ -60,7 +68,7 @@ export async function judge(item: TriageItem, model: string): Promise<Decision> 
         ? userPrompt
         : `${userPrompt}\n\n[your previous answer failed validation]: ${lastError}\nProduce a corrected judgment that satisfies every rule.`;
 
-    const run = await runQuery(prompt, model, env);
+    const run = await runQuery(prompt, cfg, env);
     lastText = run.text;
     if (run.subtype !== "success") {
       // An error result (e.g. max_turns) carries no clean output; surface why so a
@@ -125,7 +133,7 @@ async function buildReadEnv(item: TriageItem): Promise<ReadEnv> {
 
 async function runQuery(
   prompt: string,
-  model: string,
+  cfg: JudgeConfig,
   env: ReadEnv,
 ): Promise<RunResult> {
   let structured: unknown;
@@ -137,8 +145,8 @@ async function runQuery(
   for await (const msg of query({
     prompt,
     options: {
-      model,
-      systemPrompt: SYSTEM_PROMPT,
+      model: cfg.model,
+      systemPrompt: buildSystemPrompt(cfg.post_language, cfg.display_language),
       ...(env.cwd ? { cwd: env.cwd } : {}),
       mcpServers: env.mcpServers,
       allowedTools: env.allowedTools,

@@ -8,6 +8,130 @@ import { parseSettings, type AppConfig } from "./config.ts";
 import { parsePatch, commentableLines, type DiffLine } from "./diff.ts";
 import { submitPrReview, type InlineComment } from "./github/actions.ts";
 
+// ---- interface language (设置里可切换中/英) ----
+// Set per request from settings; rendering is synchronous, so module state is safe.
+type UiLang = "zh" | "en";
+let UI: UiLang = "zh";
+/** Content languages: display = what the judge writes for the human, post = what gets posted. */
+let LANGS = { display: "中文", post: "English" };
+
+function applyUiPrefs(store: Store): void {
+  const raw = (store.getSettingsRaw() ?? {}) as Record<string, any>;
+  UI = raw.ui_language === "en" ? "en" : "zh";
+  const pick = (v: unknown, d: string): string =>
+    typeof v === "string" && v.trim() ? v.trim() : d;
+  LANGS = { display: pick(raw.display_language, "中文"), post: pick(raw.post_language, "English") };
+}
+
+/** zh string → en string; anything unlisted falls back to the zh text. */
+const EN: Record<string, string> = {
+  "待处理": "Pending",
+  "已处理": "Done",
+  "设置": "Settings",
+  "日志": "Logs",
+  "预览": "Preview",
+  "发布内容": "Outgoing",
+  "没有待处理的卡片": "No pending cards",
+  "轮询每隔几分钟运行一次，新的判定会自动出现在这里": "Polling runs every few minutes — new judgments show up here automatically",
+  "还没有监控任何仓库": "No repositories watched yet",
+  "到<a href=\"/settings\">设置</a>里添加一个 GitHub 仓库，轮询就会开始": "Add a GitHub repository in <a href=\"/settings\">Settings</a> to start polling",
+  "还没有已处理的记录": "No archived cards yet",
+  "回复 / 执行 / 忽略过的卡片会归档到这里": "Replied / executed / ignored cards are archived here",
+  "在 GitHub 打开": "Open on GitHub",
+  "置信度": "confidence",
+  "草稿回复（点开审阅/编辑）": "Draft reply (open to review / edit)",
+  "批准并回复": "Approve & reply",
+  "忽略": "Ignore",
+  "建议动作": "Suggested action",
+  "执行": "Execute",
+  "逐条审核并提交": "Review points & submit",
+  "无动作": "No action",
+  "关闭 issue": "Close issue",
+  "批准 PR": "Approve PR",
+  "要求修改 PR": "Request changes",
+  "关闭 PR": "Close PR",
+  "打标签": "Add labels",
+  "已回复": "Replied",
+  "已执行": "Executed",
+  "已忽略": "Ignored",
+  "已被取代": "Superseded",
+  "运行日志": "Runtime logs",
+  "（暂无日志输出）": "(no log output yet)",
+  "判断依据": "Rationale",
+  "总体意见": "Overall comment",
+  "逐条审查意见（勾选采纳，未勾选不提交）": "Per-point comments (checked = adopt; unchecked are not submitted)",
+  "逐条审查意见": "Per-point comments",
+  "提交采纳项到 GitHub": "Submit selected to GitHub",
+  "改动 diff（按文件折叠）": "Diff (collapsed per file)",
+  "有审查意见": "has review points",
+  "（无法定位到改动行，将进 review 正文）": "(cannot anchor to a changed line — goes into the review body)",
+  "依据：": "Evidence: ",
+  "（无逐行意见，提交后仅发送总体意见正文）": "(no per-line points; only the overall body will be posted)",
+  "引擎状态：": "Engine status: ",
+  "运行中": "Running",
+  "未配置（保存后自动启动）": "Not configured (starts after saving)",
+  "认证": "Authentication",
+  "GitHub Token（需要对所监控仓库的写权限）": "GitHub token (needs write access to the watched repos)",
+  "Claude Token（可选。留空 = 使用本机 Claude Code 登录态；sk-ant-oat… 视为订阅 OAuth token，其他 sk-ant-… 视为 API Key）":
+    "Claude token (optional; empty = this machine's Claude Code login; sk-ant-oat… = subscription OAuth token, other sk-ant-… = API key)",
+  "判定与轮询": "Judging & polling",
+  "判定模型": "Judge model",
+  "轮询间隔（分钟）": "Poll interval (minutes)",
+  "首次回看天数": "First-run lookback (days)",
+  "语言": "Language",
+  "界面语言": "Interface language",
+  "展示语言（判定内容给你看的语言：判断依据、草稿预览）": "Display language (what the judge writes for you: rationale, draft previews)",
+  "发布语言（回复和 Review 实际发布到 GitHub 使用的语言）": "Posting language (used for replies and reviews actually posted to GitHub)",
+  "仓库": "Repositories",
+  "添加仓库": "Add repository",
+  "仅他人": "Others only",
+  "忽略作者,逗号分隔": "ignored authors, comma-separated",
+  "只处理非维护者发起的条目": "Only handle items opened by non-maintainers",
+  "停止监控该仓库": "Stop watching this repository",
+  "移除该仓库": "Remove this repository",
+  "保存并应用": "Save & apply",
+  "无权访问": "Access denied",
+  "缺少或错误的访问令牌。请从应用窗口打开本页面。": "Missing or invalid access token. Open this page from the app window.",
+  "链接无效或缺少 token。": "Invalid link or missing token.",
+  "未找到": "Not found",
+  "出错了": "Error",
+  "卡片不存在。": "Card not found.",
+  "token 不匹配。": "Token mismatch.",
+  "操作失败": "Action failed",
+  "卡片状态未变，可回到 Inbox 重试。": "The card is unchanged — go back to the Inbox and retry.",
+  "← 返回 Inbox": "← Back to Inbox",
+  "该草稿不存在或已过期。": "This draft does not exist or has expired.",
+  "已处理过": "Already handled",
+  "该 PR 已处理过。": "This PR was already handled.",
+  "无内容": "Nothing to submit",
+  "没有勾选任何意见，也没有总体正文，未提交。": "No points selected and no overall body — nothing was submitted.",
+  "提交失败": "Submission failed",
+  "提交到 GitHub 失败": "Failed to submit to GitHub",
+  "已提交": "Submitted",
+  "已提交 PR Review": "PR review submitted",
+  "在 GitHub 查看这次 review": "View this review on GitHub",
+  "状态": "status",
+  "无效的 JSON": "Invalid JSON",
+};
+const t = (s: string): string => (UI === "en" ? (EN[s] ?? s) : s);
+
+/** e.g. （置信度 92%） / (confidence 92%) */
+function confLabel(conf: number): string {
+  return UI === "en" ? `(confidence ${conf}%)` : `（置信度 ${conf}%）`;
+}
+/** Qualifier line above the display-language (preview) block. */
+function previewLabel(): string {
+  return UI === "en"
+    ? `Preview (${LANGS.display} — for your reference, never posted)`
+    : `预览（${LANGS.display}，仅供理解，不会发布）`;
+}
+/** Qualifier line above the post-language (outgoing) block. */
+function outgoingLabel(editable = false): string {
+  return UI === "en"
+    ? `Outgoing (${LANGS.post} — posted to GitHub${editable ? ", editable" : ""})`
+    : `发布内容（${LANGS.post}，实际发布到 GitHub${editable ? "，可编辑" : ""}）`;
+}
+
 const REPLY_RE = /^\/reply\/([A-Za-z0-9_-]+)\/?$/;
 const REVIEW_RE = /^\/review\/([A-Za-z0-9_-]+)\/?$/;
 const CARD_ACTION_RE = /^\/card\/([A-Za-z0-9_-]+)\/(reply|act|ignore)\/?$/;
@@ -42,6 +166,7 @@ export function startHttpServer(
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
       const path = url.pathname;
+      applyUiPrefs(store); // interface + content languages for everything rendered below
 
       // UI session gate: accept the token via ?auth=… once, then via cookie.
       const cookieOk = (req.headers.cookie ?? "")
@@ -49,7 +174,7 @@ export function startHttpServer(
         .includes(`ui=${uiToken}`);
       const queryOk = url.searchParams.get("auth") === uiToken;
       if (!cookieOk && !queryOk) {
-        return send(res, 403, page("无权访问", "<p>缺少或错误的访问令牌。请从应用窗口打开本页面。</p>"));
+        return send(res, 403, page(t("无权访问"), `<p>${t("缺少或错误的访问令牌。请从应用窗口打开本页面。")}</p>`));
       }
       if (queryOk && !cookieOk) {
         res.setHeader(
@@ -104,7 +229,7 @@ export function startHttpServer(
         const p = store.getPending(review[1]);
         const token = url.searchParams.get("t") ?? "";
         if (!p || !p.token || token !== p.token) {
-          return send(res, 403, page("无权访问", "<p>链接无效或缺少 token。</p>"));
+          return send(res, 403, page(t("无权访问"), `<p>${t("链接无效或缺少 token。")}</p>`));
         }
         if (req.method === "GET")
           return send(res, 200, renderReviewPage(p, renderSidebar(store, { view: "open" })));
@@ -112,10 +237,10 @@ export function startHttpServer(
           return handleSubmit(engine, p, req, res);
       }
 
-      send(res, 404, page("未找到", "<p>Not found</p>"));
+      send(res, 404, page(t("未找到"), "<p>Not found</p>"));
     } catch (err) {
       console.error("[http] handler error:", (err as Error).message);
-      send(res, 500, page("出错了", "<p>Internal error</p>"));
+      send(res, 500, page(t("出错了"), "<p>Internal error</p>"));
     }
   });
   // Listen and report the ACTUAL bound port. port 0 = let the OS pick a free one
@@ -235,13 +360,13 @@ function renderSidebar(
   return `<aside class="side">
     <div class="sbrand"><span class="mark">${icon("pr", 15)}</span>GH Triage</div>
     <nav class="snav">
-      ${folder("open", icon("inbox"), "待处理", totalOpen)}
+      ${folder("open", icon("inbox"), t("待处理"), totalOpen)}
       <div class="sgap"></div>
-      ${folder("done", icon("done"), "已处理", totalDone)}
+      ${folder("done", icon("done"), t("已处理"), totalDone)}
     </nav>
     <div class="sfoot">
-      ${item("/settings", "设置", { icon: icon("gear"), on: active.view === "settings" })}
-      ${item("/logs", "日志", { icon: icon("logs"), on: active.view === "logs" })}
+      ${item("/settings", t("设置"), { icon: icon("gear"), on: active.view === "settings" })}
+      ${item("/logs", t("日志"), { icon: icon("logs"), on: active.view === "logs" })}
     </div>
   </aside>`;
 }
@@ -258,7 +383,7 @@ function renderInbox(store: Store, view: "open" | "done", repoFilter?: string): 
       .map((p) => {
         const typeLabel = p.itemType === "pull_request" ? "PR" : "Issue";
         const when = new Date(p.createdAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
-        return `<li class="hist"><span class="chip st-${esc(p.status)}">${esc(STATUS_LABEL[p.status] ?? p.status)}</span>
+        return `<li class="hist"><span class="chip st-${esc(p.status)}">${esc(t(STATUS_LABEL[p.status] ?? p.status))}</span>
           <span class="tag ${p.itemType === "pull_request" ? "tag-pr" : "tag-issue"}">${typeLabel}</span>
           <a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">${esc(p.owner)}/${esc(p.repo)} #${p.number}</a>
           <span class="meta lbl">${esc(clip(p.title, 90))}</span>
@@ -266,11 +391,11 @@ function renderInbox(store: Store, view: "open" | "done", repoFilter?: string): 
       })
       .join("");
     return page(
-      `已处理${repoFilter ? ` · ${repoFilter}` : ""}`,
-      `<h1>已处理${suffix}</h1>
+      `${t("已处理")}${repoFilter ? ` · ${repoFilter}` : ""}`,
+      `<h1>${t("已处理")}${suffix}</h1>
        ${rows
          ? `<div class="panel"><ul class="histlist">${rows}</ul></div>`
-         : `<div class="empty"><span class="big">${icon("done", 36)}</span>还没有已处理的记录${suffix ? "" : "<br><span class=\"meta\">回复 / 执行 / 忽略过的卡片会归档到这里</span>"}</div>`}`,
+         : `<div class="empty"><span class="big">${icon("done", 36)}</span>${t("还没有已处理的记录")}${suffix ? "" : `<br><span class="meta">${t("回复 / 执行 / 忽略过的卡片会归档到这里")}</span>`}</div>`}`,
       { refreshSeconds: 60, side },
     );
   }
@@ -280,12 +405,12 @@ function renderInbox(store: Store, view: "open" | "done", repoFilter?: string): 
 
   // Repo management lives on the settings page; the inbox only shows cards.
   const emptyState = watchedRepoKeys(store).length
-    ? `<div class="empty"><span class="big">${icon("inbox", 36)}</span>没有待处理的卡片<br><span class="meta">轮询每隔几分钟运行一次，新的判定会自动出现在这里</span></div>`
-    : `<div class="empty"><span class="big">${icon("repo", 36)}</span>还没有监控任何仓库<br><span class="meta">到<a href="/settings">设置</a>里添加一个 GitHub 仓库，轮询就会开始</span></div>`;
+    ? `<div class="empty"><span class="big">${icon("inbox", 36)}</span>${t("没有待处理的卡片")}<br><span class="meta">${t("轮询每隔几分钟运行一次，新的判定会自动出现在这里")}</span></div>`
+    : `<div class="empty"><span class="big">${icon("repo", 36)}</span>${t("还没有监控任何仓库")}<br><span class="meta">${t('到<a href="/settings">设置</a>里添加一个 GitHub 仓库，轮询就会开始')}</span></div>`;
 
   return page(
     `Inbox (${open.length})`,
-    `<h1>待处理${suffix}${open.length ? `<span class="count">${open.length}</span>` : ""}</h1>
+    `<h1>${t("待处理")}${suffix}${open.length ? `<span class="count">${open.length}</span>` : ""}</h1>
      ${cards || emptyState}`,
     { refreshSeconds: 60, side },
   );
@@ -302,11 +427,14 @@ function renderLogsPage(store: Store): string {
       return `<div class="ll ${cls}">[${t}] ${esc(l.text)}</div>`;
     })
     .join("");
+  const metaLine = UI === "en"
+    ? `Last ${lines.length} lines since process start (up to 1000 kept in memory, cleared on restart) · auto-refreshes every 15s`
+    : `进程启动以来的最近 ${lines.length} 行（内存保留上限 1000 行，重启后清空）· 每 15 秒自动刷新`;
   return page(
-    "运行日志",
-    `<h1>运行日志</h1>
-     <p class="meta">进程启动以来的最近 ${lines.length} 行（内存保留上限 1000 行，重启后清空）· 每 15 秒自动刷新</p>
-     <div class="logbox" id="logbox">${rows || `<div class="ll meta">（暂无日志输出）</div>`}</div>
+    t("运行日志"),
+    `<h1>${t("运行日志")}</h1>
+     <p class="meta">${metaLine}</p>
+     <div class="logbox" id="logbox">${rows || `<div class="ll meta">${t("（暂无日志输出）")}</div>`}</div>
      <script>var lb=document.getElementById('logbox');lb.scrollTop=lb.scrollHeight;</script>`,
     { refreshSeconds: 15, side: renderSidebar(store, { view: "logs" }) },
   );
@@ -366,7 +494,7 @@ function renderSetupWizard(): string {
        var msg=document.getElementById('w-msg');
        var gh=document.getElementById('w-github').value.trim();
        if(!gh){ msg.textContent='❌ GitHub Token 不能为空'; return; }
-       msg.textContent='保存中…';
+       msg.textContent='${UI === "en" ? "Saving…" : "保存中…"}';
        try{
          var res=await fetch('/settings',{method:'POST',
            headers:{'content-type':'application/json'},
@@ -400,44 +528,57 @@ function renderSettingsPage(store: Store, engine: TriageEngine): string {
       <input class="r-url" type="text" placeholder="https://github.com/owner/repo" value="${esc(r.url ?? "")}">
       <label><input class="r-issues" type="checkbox" ${watch.includes("issues") ? "checked" : ""}> Issues</label>
       <label><input class="r-pulls" type="checkbox" ${watch.includes("pulls") ? "checked" : ""}> PRs</label>
-      <label title="只处理非维护者发起的条目"><input class="r-others" type="checkbox" ${others ? "checked" : ""}> 仅他人</label>
-      <input class="r-ignore" type="text" placeholder="忽略作者,逗号分隔" value="${esc(ignores)}">
+      <label title="${t("只处理非维护者发起的条目")}"><input class="r-others" type="checkbox" ${others ? "checked" : ""}> ${t("仅他人")}</label>
+      <input class="r-ignore" type="text" placeholder="${t("忽略作者,逗号分隔")}" value="${esc(ignores)}">
       <button type="button" class="ghost" onclick="this.parentElement.remove()" aria-label="移除该仓库">${icon("x", 13)}</button>
     </div>`;
   };
 
   return page(
-    "设置",
-    `<h1>设置</h1>
-     <p class="meta">引擎状态：${engine.configured ? `<span class="dot on"></span>运行中` : `<span class="dot"></span>未配置（保存后自动启动）`}</p>
+    t("设置"),
+    `<h1>${t("设置")}</h1>
+     <p class="meta">${t("引擎状态：")}${engine.configured ? `<span class="dot on"></span>${t("运行中")}` : `<span class="dot"></span>${t("未配置（保存后自动启动）")}`}</p>
 
-     <h2>${icon("lock", 13)} 认证</h2>
+     <h2>${icon("lock", 13)} ${t("认证")}</h2>
      <div class="panel">
-       <label class="field">GitHub Token（需要对所监控仓库的写权限）
+       <label class="field">${t("GitHub Token（需要对所监控仓库的写权限）")}
          <input id="s-github" type="password" autocomplete="off" value="${v(raw.github_token, "")}"></label>
-       <label class="field">Claude Token（可选。留空 = 使用本机 Claude Code 登录态；sk-ant-oat… 视为订阅 OAuth token，其他 sk-ant-… 视为 API Key）
+       <label class="field">${t("Claude Token（可选。留空 = 使用本机 Claude Code 登录态；sk-ant-oat… 视为订阅 OAuth token，其他 sk-ant-… 视为 API Key）")}
          <input id="s-claude" type="password" autocomplete="off" value="${v(raw.claude_token, "")}"></label>
      </div>
 
-     <h2>${icon("cpu", 13)} 判定与轮询</h2>
+     <h2>${icon("cpu", 13)} ${t("判定与轮询")}</h2>
      <div class="panel grid">
-       <label class="field">判定模型
+       <label class="field">${t("判定模型")}
          <input id="s-model" type="text" value="${v(raw.model, "claude-opus-4-8")}"></label>
-       <label class="field">轮询间隔（分钟）
+       <label class="field">${t("轮询间隔（分钟）")}
          <input id="s-interval" type="number" min="1" value="${v(raw.poll_interval_minutes, "5")}"></label>
-       <label class="field">首次回看天数
+       <label class="field">${t("首次回看天数")}
          <input id="s-lookback" type="number" min="1" value="${v(raw.lookback_days_on_first_run, "7")}"></label>
      </div>
 
-     <h2>${icon("repo", 13)} 仓库</h2>
+     <h2>${icon("globe", 13)} ${t("语言")}</h2>
+     <div class="panel grid">
+       <label class="field">${t("界面语言")}
+         <select id="s-uilang">
+           <option value="zh" ${raw.ui_language !== "en" ? "selected" : ""}>中文</option>
+           <option value="en" ${raw.ui_language === "en" ? "selected" : ""}>English</option>
+         </select></label>
+       <label class="field">${t("展示语言（判定内容给你看的语言：判断依据、草稿预览）")}
+         <input id="s-displang" type="text" value="${v(raw.display_language, "中文")}"></label>
+       <label class="field">${t("发布语言（回复和 Review 实际发布到 GitHub 使用的语言）")}
+         <input id="s-postlang" type="text" value="${v(raw.post_language, "English")}"></label>
+     </div>
+
+     <h2>${icon("repo", 13)} ${t("仓库")}</h2>
      <div class="panel">
        <div id="repos">${repos.map(repoRow).join("")}</div>
-       <button type="button" class="ghost" onclick="addRepo()">${icon("plus", 14)} 添加仓库</button>
+       <button type="button" class="ghost" onclick="addRepo()">${icon("plus", 14)} ${t("添加仓库")}</button>
        <template id="repo-tpl">${repoRow({})}</template>
      </div>
 
      <div class="actions" style="margin-top:1.5rem">
-       <button onclick="save()">${icon("save", 14)} 保存并应用</button>
+       <button onclick="save()">${icon("save", 14)} ${t("保存并应用")}</button>
        <span id="s-msg" class="meta"></span>
      </div>
 
@@ -464,6 +605,9 @@ function renderSettingsPage(store: Store, engine: TriageEngine): string {
          model:document.getElementById('s-model').value.trim(),
          poll_interval_minutes:Number(document.getElementById('s-interval').value),
          lookback_days_on_first_run:Number(document.getElementById('s-lookback').value),
+         ui_language:document.getElementById('s-uilang').value,
+         display_language:document.getElementById('s-displang').value.trim()||'中文',
+         post_language:document.getElementById('s-postlang').value.trim()||'English',
          repos:repos
        };
      }
@@ -475,7 +619,7 @@ function renderSettingsPage(store: Store, engine: TriageEngine): string {
            headers:{'content-type':'application/json'},
            body:JSON.stringify(collect())});
          var out=await res.json();
-         if(out.ok){ msg.textContent='✅ 已保存并应用，正在跳转…'; setTimeout(function(){location.href='/inbox'},800); }
+         if(out.ok){ msg.textContent='${UI === "en" ? "✅ Saved and applied — redirecting…" : "✅ 已保存并应用，正在跳转…"}'; setTimeout(function(){location.href='/inbox'},800); }
          else{ msg.textContent='❌ '+out.error; }
        }catch(e){ msg.textContent='❌ '+e; }
      }
@@ -494,7 +638,7 @@ async function handleSaveSettings(
   try {
     raw = JSON.parse(await readBody(req));
   } catch {
-    return sendJson(res, 400, { ok: false, error: "无效的 JSON" });
+    return sendJson(res, 400, { ok: false, error: t("无效的 JSON") });
   }
   const parsed = parseSettings(raw);
   if (!parsed.ok) {
@@ -520,24 +664,26 @@ function renderInboxCard(p: PendingDecision): string {
   const d = p.decision;
   const conf = Math.round(d.confidence * 100);
   const tok = `<input type="hidden" name="token" value="${esc(p.token)}">`;
-  const ignoreForm = `<form method="post" action="/card/${p.id}/ignore" class="inline">${tok}<button class="ghost">${icon("ban", 14)} 忽略</button></form>`;
+  const ignoreForm = `<form method="post" action="/card/${p.id}/ignore" class="inline">${tok}<button class="ghost">${icon("ban", 14)} ${t("忽略")}</button></form>`;
 
   let body: string;
   if (d.needsReply && p.itemType === "pull_request") {
     const url = `/review/${p.id}?t=${encodeURIComponent(p.token)}`;
-    body = `<p>${icon("search", 14)} PR 审查意见 <b>${d.reviewPoints.length}</b> 条</p>
-      <div class="actions"><a class="btn" href="${url}">${icon("search", 14)} 逐条审核并提交</a>${ignoreForm}</div>`;
+    const n = d.reviewPoints.length;
+    const countLine = UI === "en" ? `<b>${n}</b> review point${n === 1 ? "" : "s"}` : `PR 审查意见 <b>${n}</b> 条`;
+    body = `<p>${icon("search", 14)} ${countLine}</p>
+      <div class="actions"><a class="btn" href="${url}">${icon("search", 14)} ${t("逐条审核并提交")}</a>${ignoreForm}</div>`;
   } else if (d.needsReply) {
     const en = d.draftReply ?? "";
     const zh = d.draftReplyZh?.trim() || en; // old cards may lack the Chinese draft
-    body = `<details><summary>${icon("msg", 14)} 草稿回复（点开审阅/编辑）</summary>
+    body = `<details><summary>${icon("msg", 14)} ${t("草稿回复（点开审阅/编辑）")}</summary>
       <div class="draft">
-        ${LANG_TABS}
-        <div class="lang-zh"><p class="meta">中文草稿（仅供理解，不会发布）</p><pre>${esc(zh)}</pre></div>
+        ${langTabs()}
+        <div class="lang-zh"><p class="meta">${previewLabel()}</p><pre>${esc(zh)}</pre></div>
         <form method="post" action="/card/${p.id}/reply">${tok}
-          <div class="lang-en"><p class="meta">English draft（实际发布到 GitHub 的内容，可编辑）</p>
+          <div class="lang-en"><p class="meta">${outgoingLabel(true)}</p>
             <textarea name="body" rows="6">${esc(en)}</textarea></div>
-          <div class="actions"><button>${icon("check", 14)} 批准并回复</button></div>
+          <div class="actions"><button>${icon("check", 14)} ${t("批准并回复")}</button></div>
         </form>
       </div></details>
       <div class="actions">${ignoreForm}</div>`;
@@ -550,8 +696,8 @@ function renderInboxCard(p: PendingDecision): string {
     const act =
       d.suggestedAction === "none"
         ? ""
-        : `<form method="post" action="/card/${p.id}/act" class="inline">${tok}<button>${icon("check", 14)} 执行「${esc(label)}」</button></form>`;
-    body = `<p>${icon("wrench", 14)} 建议动作: <b>${esc(label)}</b></p>${labels}
+        : `<form method="post" action="/card/${p.id}/act" class="inline">${tok}<button>${icon("check", 14)} ${UI === "en" ? `Execute "${esc(t(label))}"` : `执行「${esc(label)}」`}</button></form>`;
+    body = `<p>${icon("wrench", 14)} ${UI === "en" ? "Suggested action" : "建议动作"}: <b>${esc(t(label))}</b></p>${labels}
       <div class="actions">${act}${ignoreForm}</div>`;
   }
 
@@ -561,9 +707,9 @@ function renderInboxCard(p: PendingDecision): string {
       : `<span class="tag tag-issue">Issue</span>`;
   return `<div class="card">
     <div class="cardhead">${tag}<b>${esc(p.owner)}/${esc(p.repo)}</b><span>#${p.number}</span>
-      <a class="ext" href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">在 GitHub 打开 ${icon("ext", 12)}</a></div>
+      <a class="ext" href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">${t("在 GitHub 打开")} ${icon("ext", 12)}</a></div>
     <div class="title">${esc(clip(p.title, 200))}</div>
-    <div class="reasoning">${icon("spark", 14)} ${esc(clip(d.reasoning, 600))} <span class="meta">（置信度 ${conf}%）</span></div>
+    <div class="reasoning">${icon("spark", 14)} ${esc(clip(d.reasoning, 600))} <span class="meta">${confLabel(conf)}</span></div>
     ${body}
   </div>`;
 }
@@ -577,10 +723,10 @@ async function handleCardAction(
   res: ServerResponse,
 ): Promise<void> {
   const p = store.getPending(id);
-  if (!p) return send(res, 404, page("未找到", "<p>卡片不存在。</p>"));
+  if (!p) return send(res, 404, page(t("未找到"), `<p>${t("卡片不存在。")}</p>`));
   const form = new URLSearchParams(await readBody(req));
   if ((form.get("token") ?? "") !== p.token) {
-    return send(res, 403, page("无权访问", "<p>token 不匹配。</p>"));
+    return send(res, 403, page(t("无权访问"), `<p>${t("token 不匹配。")}</p>`));
   }
 
   try {
@@ -597,9 +743,9 @@ async function handleCardAction(
       res,
       502,
       page(
-        "操作失败",
-        `<h1>❌ 操作失败</h1><p>${esc((e as Error).message)}</p>
-         <p class="meta">卡片状态未变，可回到 Inbox 重试。</p><p><a href="/inbox">← 返回 Inbox</a></p>`,
+        t("操作失败"),
+        `<h1>❌ ${t("操作失败")}</h1><p>${esc((e as Error).message)}</p>
+         <p class="meta">${t("卡片状态未变，可回到 Inbox 重试。")}</p><p><a href="/inbox">${t("← 返回 Inbox")}</a></p>`,
       ),
     );
   }
@@ -614,7 +760,7 @@ function clip(s: string, max: number): string {
 // ---- issue draft page (read-only) ----
 function serveReply(store: Store, id: string, res: ServerResponse): void {
   const p = store.getPending(id);
-  if (!p) return send(res, 404, page("未找到", "<p>该草稿不存在或已过期。</p>"));
+  if (!p) return send(res, 404, page(t("未找到"), `<p>${t("该草稿不存在或已过期。")}</p>`));
   const typeLabel = p.itemType === "pull_request" ? "PR" : "Issue";
   const en = p.decision.draftReply?.trim() || "(no draft)";
   const zh = p.decision.draftReplyZh?.trim() || en; // fallback to EN on old cards
@@ -624,11 +770,11 @@ function serveReply(store: Store, id: string, res: ServerResponse): void {
     page(
       `${p.owner}/${p.repo} #${p.number}`,
       `<h1><span class="tag ${p.itemType === "pull_request" ? "tag-pr" : "tag-issue"}">${typeLabel}</span> ${esc(p.owner)}/${esc(p.repo)} #${p.number}</h1>
-       <p class="meta"><a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">在 GitHub 打开 ${icon("ext", 12)}</a> · <span class="chip st-${esc(p.status)}">${esc(STATUS_LABEL[p.status] ?? p.status)}</span></p>
-       <h2>判断依据</h2><p>${esc(p.decision.reasoning)}</p>
-       ${LANG_TABS}
-       <div class="lang-zh"><h2>草稿回复（中文，仅供理解）</h2><pre>${esc(zh)}</pre></div>
-       <div class="lang-en"><h2>Draft reply (English — this is what gets posted)</h2><pre>${esc(en)}</pre></div>`,
+       <p class="meta"><a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">${t("在 GitHub 打开")} ${icon("ext", 12)}</a> · <span class="chip st-${esc(p.status)}">${esc(t(STATUS_LABEL[p.status] ?? p.status))}</span></p>
+       <h2>${t("判断依据")}</h2><p>${esc(p.decision.reasoning)}</p>
+       ${langTabs()}
+       <div class="lang-zh"><h2>${previewLabel()}</h2><pre>${esc(zh)}</pre></div>
+       <div class="lang-en"><h2>${outgoingLabel()}</h2><pre>${esc(en)}</pre></div>`,
       { side: renderSidebar(store, { view: "open" }) },
     ),
   );
@@ -660,7 +806,7 @@ function renderReviewPage(p: PendingDecision, side: string): string {
       const lines = parsedByPath.get(pt.path);
       const anchored = pt.line != null && lines ? commentableFor(pt.path).has(pt.line) : false;
       const loc = `${esc(pt.path)}${pt.line != null ? `:${pt.line}` : ""}`;
-      const warn = anchored ? "" : ` <span class="warn">（无法定位到改动行，将进 review 正文）</span>`;
+      const warn = anchored ? "" : ` <span class="warn">${t("（无法定位到改动行，将进 review 正文）")}</span>`;
       const code = pt.line != null && lines ? snippet(lines, pt.line) : "";
       return `<li class="pt">
         <label><input type="checkbox" name="pt" value="${i}" checked ${done ? "disabled" : ""}>
@@ -668,27 +814,30 @@ function renderReviewPage(p: PendingDecision, side: string): string {
           <code>${loc}</code>${warn}</label>
         <div class="cmt lang-zh">${esc(pt.commentZh || pt.comment)}</div>
         <div class="en lang-en">${esc(pt.comment)}</div>
-        ${pt.evidence ? `<div class="ev">依据：${esc(pt.evidence)}</div>` : ""}
+        ${pt.evidence ? `<div class="ev">${t("依据：")}${esc(pt.evidence)}</div>` : ""}
         ${code ? `<pre class="code">${code}</pre>` : ""}
       </li>`;
     })
     .join("");
 
-  const list = `<ul class="pts">${items || "<li>（无逐行意见，提交后仅发送总体意见正文）</li>"}</ul>`;
-  const zhBlock = `<div class="lang-zh"><h2>总体意见（中文，仅供理解）</h2><pre>${esc(overallZh || overallEn || "(none)")}</pre></div>`;
+  const list = `<ul class="pts">${items || `<li>${t("（无逐行意见，提交后仅发送总体意见正文）")}</li>`}</ul>`;
+  const zhBlock = `<div class="lang-zh"><h2>${t("总体意见")} · ${previewLabel()}</h2><pre>${esc(overallZh || overallEn || "(none)")}</pre></div>`;
+  const handledNote = UI === "en"
+    ? `This PR was already handled (status: ${esc(t(STATUS_LABEL[p.status] ?? p.status))}) — it cannot be resubmitted.`
+    : `该 PR 已处理（状态：${esc(t(STATUS_LABEL[p.status] ?? p.status))}），无法再次提交。`;
   const inner = done
-    ? `${LANG_TABS}${zhBlock}
-       <div class="lang-en"><h2>Review body (English — posted)</h2><pre>${esc(overallEn || "(none)")}</pre></div>
-       <h2>逐条审查意见</h2>${list}
-       <p class="meta">该 PR 已处理（状态：${esc(p.status)}），无法再次提交。</p>`
-    : `${LANG_TABS}
+    ? `${langTabs()}${zhBlock}
+       <div class="lang-en"><h2>${t("总体意见")} · ${outgoingLabel()}</h2><pre>${esc(overallEn || "(none)")}</pre></div>
+       <h2>${t("逐条审查意见")}</h2>${list}
+       <p class="meta">${handledNote}</p>`
+    : `${langTabs()}
        <form method="post" action="/review/${p.id}?t=${encodeURIComponent(p.token)}">
         ${zhBlock}
-        <div class="lang-en"><h2>Review body (English — this is what gets posted, editable)</h2>
+        <div class="lang-en"><h2>${t("总体意见")} · ${outgoingLabel(true)}</h2>
           <textarea name="body" rows="6" placeholder="Leave empty to post no overall body">${esc(overallEn)}</textarea></div>
-        <h2>逐条审查意见（勾选采纳，未勾选不提交）</h2>
+        <h2>${t("逐条审查意见（勾选采纳，未勾选不提交）")}</h2>
         ${list}
-        <button type="submit">提交采纳项到 GitHub</button>
+        <button type="submit">${t("提交采纳项到 GitHub")}</button>
       </form>`;
 
   // Full diff, collapsed per file (files with review points open by default).
@@ -699,13 +848,13 @@ function renderReviewPage(p: PendingDecision, side: string): string {
   // initial DOM small regardless of PR size.
   const withPoints = new Set(d.reviewPoints.map((rp) => rp.path));
   const diffSection = files.length
-    ? `<h2>改动 diff（按文件折叠）</h2>` +
+    ? `<h2>${t("改动 diff（按文件折叠）")}</h2>` +
       files
         .map((f) => {
           const lines = parsedByPath.get(f.path) ?? [];
           const body = `<pre class="code">${renderPatch(lines)}</pre>`;
           return withPoints.has(f.path)
-            ? `<details open><summary>${esc(f.path)} · 有审查意见</summary>${body}</details>`
+            ? `<details open><summary>${esc(f.path)} · ${t("有审查意见")}</summary>${body}</details>`
             : `<details><summary>${esc(f.path)}</summary><template>${body}</template></details>`;
         })
         .join("")
@@ -714,8 +863,8 @@ function renderReviewPage(p: PendingDecision, side: string): string {
   return page(
     `Review ${p.owner}/${p.repo} #${p.number}`,
     `<h1><span class="tag tag-pr">PR</span> ${esc(p.owner)}/${esc(p.repo)} #${p.number}</h1>
-     <p class="meta"><a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">在 GitHub 打开 ${icon("ext", 12)}</a> · <span class="chip st-${esc(p.status)}">${esc(STATUS_LABEL[p.status] ?? p.status)}</span></p>
-     <h2>${icon("spark", 13)} 判断依据（置信度 ${Math.round(d.confidence * 100)}%）</h2>
+     <p class="meta"><a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">${t("在 GitHub 打开")} ${icon("ext", 12)}</a> · <span class="chip st-${esc(p.status)}">${esc(t(STATUS_LABEL[p.status] ?? p.status))}</span></p>
+     <h2>${icon("spark", 13)} ${t("判断依据")} ${confLabel(Math.round(d.confidence * 100))}</h2>
      <div class="panel">${esc(d.reasoning)}</div>
      ${inner}
      ${diffSection}`,
@@ -769,7 +918,7 @@ async function handleSubmit(
   res: ServerResponse,
 ): Promise<void> {
   if (p.status !== "pending" && p.status !== "awaiting_edit") {
-    return send(res, 409, page("已处理", "<p>该 PR 已处理过。</p>"));
+    return send(res, 409, page(t("已处理过"), `<p>${t("该 PR 已处理过。")}</p>`));
   }
   const raw = await readBody(req);
   const form = new URLSearchParams(raw);
@@ -781,7 +930,7 @@ async function handleSubmit(
 
   const { body, comments } = buildReviewSubmission(p, selected, overrideBody);
   if (!body && comments.length === 0) {
-    return send(res, 400, page("无内容", "<p>没有勾选任何意见，也没有总体正文，未提交。</p>"));
+    return send(res, 400, page(t("无内容"), `<p>${t("没有勾选任何意见，也没有总体正文，未提交。")}</p>`));
   }
 
   let url: string;
@@ -791,12 +940,14 @@ async function handleSubmit(
     // Keep the card pending so it can be retried after fixing the cause.
     const msg = (e as Error).message;
     const hint = /not accessible|403/i.test(msg)
-      ? `<p class="meta">看起来是 GITHUB_TOKEN 权限不够：提交 PR review 需要该仓库的 <b>Pull requests: Write</b> 权限（细粒度 PAT 里勾 Pull requests / Read and write，或经典 PAT 勾 <code>repo</code>）。改好 token、重启后回到本页重新提交即可——本条尚未提交、状态未变。</p>`
+      ? UI === "en"
+        ? `<p class="meta">This looks like insufficient token permission: submitting a PR review needs <b>Pull requests: Write</b> on the repo (fine-grained PAT: Pull requests / Read and write; classic PAT: <code>repo</code>). Fix the token, restart, and resubmit from this page — nothing was posted and the card is unchanged.</p>`
+        : `<p class="meta">看起来是 GITHUB_TOKEN 权限不够：提交 PR review 需要该仓库的 <b>Pull requests: Write</b> 权限（细粒度 PAT 里勾 Pull requests / Read and write，或经典 PAT 勾 <code>repo</code>）。改好 token、重启后回到本页重新提交即可——本条尚未提交、状态未变。</p>`
       : "";
     return send(
       res,
       502,
-      page("提交失败", `<h1>提交到 GitHub 失败</h1><p>${esc(msg)}</p>${hint}`),
+      page(t("提交失败"), `<h1>${t("提交到 GitHub 失败")}</h1><p>${esc(msg)}</p>${hint}`),
     );
   }
   engine.noteReviewSubmitted(
@@ -804,15 +955,18 @@ async function handleSubmit(
     `✅ 已提交 PR Review（行内 ${comments.length} 条）`,
     url,
   );
+  const summaryLine = UI === "en"
+    ? `${comments.length} inline comment${comments.length === 1 ? "" : "s"}${body ? ", plus an overall body" : ""}.`
+    : `行内评论 ${comments.length} 条${body ? "，含总体正文" : ""}。`;
   send(
     res,
     200,
     page(
-      "已提交",
-      `<h1>✅ 已提交 PR Review</h1>
-       <p>行内评论 ${comments.length} 条${body ? "，含总体正文" : ""}。</p>
-       <p><a href="${esc(url)}" target="_blank" rel="noopener">在 GitHub 查看这次 review</a></p>
-       <p><a href="/inbox">← 返回 Inbox</a></p>`,
+      t("已提交"),
+      `<h1>✅ ${t("已提交 PR Review")}</h1>
+       <p>${summaryLine}</p>
+       <p><a href="${esc(url)}" target="_blank" rel="noopener">${t("在 GitHub 查看这次 review")}</a></p>
+       <p><a href="/inbox">${t("← 返回 Inbox")}</a></p>`,
     ),
   );
 }
@@ -896,8 +1050,10 @@ function send(res: ServerResponse, status: number, html: string): void {
   res.end(body);
 }
 
-/** Global language-tab UI: default Chinese, click to reveal English blocks. */
-const LANG_TABS = `<div class="tabs"><button data-l="zh" class="active" onclick="setLang('zh')">中文</button><button data-l="en" onclick="setLang('en')">English</button></div>`;
+/** Global language-tab UI: preview (display language) vs outgoing (post language). */
+function langTabs(): string {
+  return `<div class="tabs"><button data-l="zh" class="active" onclick="setLang('zh')">${t("预览")} · ${esc(LANGS.display)}</button><button data-l="en" onclick="setLang('en')">${t("发布内容")} · ${esc(LANGS.post)}</button></div>`;
+}
 
 function page(
   title: string,
@@ -910,7 +1066,7 @@ function page(
     wide?: boolean;
   },
 ): string {
-  return `<!doctype html><html lang="zh" data-lang="zh"><head><meta charset="utf-8">
+  return `<!doctype html><html lang="${UI}" data-lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeconds}">` : ""}
 <title>${esc(title)}</title>
@@ -1032,11 +1188,12 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
   form.inline{display:inline;margin:0}
 
   /* forms */
-  input[type=text],input[type=password],input[type=number],textarea{width:100%;font:inherit;
+  input[type=text],input[type=password],input[type=number],textarea,select{width:100%;font:inherit;
     padding:.5rem .7rem;border:1px solid var(--border);border-radius:8px;
     background:var(--surface);color:inherit;transition:border-color .12s,box-shadow .12s}
-  input:focus,textarea:focus{outline:none;border-color:var(--accent);
+  input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent);
     box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 18%,transparent)}
+  label.field select{margin-top:.35rem;font-weight:400}
   input[type=checkbox]{width:auto;accent-color:var(--accent)}
   textarea{background:var(--surface2)}
   label.field{display:block;margin:.85rem 0;font-size:.85rem;font-weight:550;color:var(--muted)}
@@ -1150,6 +1307,7 @@ const ICON_PATHS: Record<string, string> = {
   pr: '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M6 9v12"/>',
   tag: '<path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/>',
   clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  globe: '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
 };
 function icon(name: string, size = 16): string {
   return `<svg class="i" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] ?? ""}</svg>`;

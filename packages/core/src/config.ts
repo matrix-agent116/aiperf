@@ -26,6 +26,15 @@ export const SettingsSchema = z.object({
   poll_interval_minutes: z.number().positive().default(5),
   model: z.string().default("claude-opus-4-8"),
   lookback_days_on_first_run: z.number().positive().default(7),
+  /** App interface language (server-rendered pages) */
+  ui_language: z.enum(["zh", "en"]).default("zh"),
+  /**
+   * Language of judge output written FOR THE HUMAN (reasoning, draft previews).
+   * Free-form language name fed to the judge prompt, e.g. "中文", "English", "日本語".
+   */
+  display_language: z.string().min(1).default("中文"),
+  /** Language of text actually POSTED to GitHub (replies, review comments). */
+  post_language: z.string().min(1).default("English"),
   // Empty is allowed: the setup wizard configures tokens/model only, and repos are
   // added later from the Inbox page (a cycle over zero repos is just a no-op).
   repos: z.array(RepoConfigSchema).default([]),
