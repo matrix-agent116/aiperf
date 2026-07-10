@@ -54,6 +54,7 @@ function showWindow() {
       case "x": wc.cut(); break;
       case "a": wc.selectAll(); break;
       case "z": input.shift ? wc.redo() : wc.undo(); break;
+      case "r": wc.reload(); break;
       default: return;
     }
     e.preventDefault();
