@@ -35,7 +35,9 @@ export const SettingsSchema = z.object({
       port: z.number().int().nonnegative().default(0),
     })
     .default({}),
-  repos: z.array(RepoConfigSchema).nonempty("至少要配置一个仓库"),
+  // Empty is allowed: the setup wizard configures tokens/model only, and repos are
+  // added later from the Inbox page (a cycle over zero repos is just a no-op).
+  repos: z.array(RepoConfigSchema).default([]),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;

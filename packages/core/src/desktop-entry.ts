@@ -78,7 +78,7 @@ parentPort.on("message", (e) => {
 });
 
 // Boot from stored settings; unconfigured is fine — the server still comes up and
-// /inbox redirects to the settings panel, whose save hook starts the engine.
+// /inbox redirects to the /setup wizard, whose save hook starts the engine.
 const stored = store.getSettingsRaw();
 const parsed = stored ? parseSettings(stored) : null;
 if (parsed && !parsed.ok) {

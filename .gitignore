@@ -4,3 +4,4 @@ data/
 .env
 config.yaml
 *.log
+.DS_Store

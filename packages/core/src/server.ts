@@ -14,7 +14,9 @@ const CARD_ACTION_RE = /^\/card\/([A-Za-z0-9_-]+)\/(reply|act|ignore)\/?$/;
 /**
  * Local HTTP service that IS the app UI (the desktop shell loads these pages):
  *  - GET  /                    → /inbox
- *  - GET  /inbox               open cards with action buttons + recent history
+ *  - GET  /setup               first-run wizard: step 1 model, step 2 GitHub (no repos)
+ *  - GET  /inbox               open cards + watched-repo management + recent history
+ *  - POST /repos/add|remove    add/remove a watched repo from the Inbox page
  *  - POST /card/<id>/<action>  reply (with optional edited text) / act / ignore
  *  - GET  /reply/<id>          issue draft preview (read-only)
  *  - GET  /review/<id>?t=tok   PR review page: per-point checklist + code
@@ -54,12 +56,31 @@ export function startHttpServer(
       }
 
       if (req.method === "GET" && (path === "/" || path === "/inbox")) {
-        // First run: nothing configured yet — take the user to the settings panel.
+        // First run: nothing configured yet — take the user through the wizard.
         if (!store.getSettingsRaw()) {
-          res.writeHead(302, { location: "/settings" });
+          res.writeHead(302, { location: "/setup" });
           return res.end();
         }
         return send(res, 200, renderInbox(store));
+      }
+
+      if (req.method === "GET" && path === "/setup") {
+        // The wizard is for first run only; afterwards the full panel takes over.
+        if (store.getSettingsRaw()) {
+          res.writeHead(302, { location: "/settings" });
+          return res.end();
+        }
+        return send(res, 200, renderSetupWizard());
+      }
+
+      if (req.method === "POST" && (path === "/repos/add" || path === "/repos/remove")) {
+        return handleRepoMutation(
+          store,
+          path === "/repos/add" ? "add" : "remove",
+          req,
+          res,
+          hooks?.onSettingsChanged,
+        );
       }
 
       if (path === "/settings") {
@@ -165,13 +186,150 @@ function renderInbox(store: Store): string {
     })
     .join("");
 
+  const raw = (store.getSettingsRaw() ?? {}) as Record<string, any>;
+  const repos: any[] = Array.isArray(raw.repos) ? raw.repos : [];
+  const repoRows = repos
+    .map((r) => {
+      const watch: string[] = Array.isArray(r.watch) ? r.watch : ["issues", "pulls"];
+      return `<li class="hist"><code>${esc(String(r.url ?? ""))}</code>
+        <span class="meta">${watch.includes("issues") ? "Issues" : ""}${watch.length === 2 ? " + " : ""}${watch.includes("pulls") ? "PRs" : ""}</span>
+        <form method="post" action="/repos/remove" class="inline">
+          <input type="hidden" name="url" value="${esc(String(r.url ?? ""))}">
+          <button class="ghost" title="停止监控该仓库">✕</button>
+        </form></li>`;
+    })
+    .join("");
+  const repoSection = `<h2>📦 监控的仓库 <span class="meta">(${repos.length})</span></h2>
+     ${repos.length
+       ? `<ul class="histlist">${repoRows}</ul>`
+       : `<p class="meta">还没有监控任何仓库 —— 在下面添加一个，轮询就会开始。</p>`}
+     <form method="post" action="/repos/add" class="addrepo">
+       <input type="text" name="url" placeholder="https://github.com/owner/repo" required>
+       <button>＋ 添加仓库</button>
+     </form>
+     <p class="meta">仓库的高级选项（只看他人 / 忽略作者 / 只看 Issues 或 PRs）在<a href="/settings">设置</a>里调整。</p>`;
+
+  const emptyHint = repos.length
+    ? `<p class="meta">没有待处理的卡片。轮询会自动带来新的判定。</p>`
+    : "";
+
   return page(
     `Inbox (${open.length})`,
     `<h1>📥 待处理 <span class="count">${open.length}</span> <a class="gear" href="/settings" title="设置">⚙️</a></h1>
-     ${cards || `<p class="meta">没有待处理的卡片。轮询会自动带来新的判定。</p>`}
+     ${cards || emptyHint}
+     ${repoSection}
      ${history ? `<h2>最近处理</h2><ul class="histlist">${history}</ul>` : ""}`,
     { refreshSeconds: 60 },
   );
+}
+
+// ---- first-run setup wizard (model → GitHub; repos are added later on /inbox) ----
+
+function renderSetupWizard(): string {
+  return page(
+    "初始设置",
+    `<h1>👋 欢迎使用 GitHub Triage</h1>
+     <p class="meta">两步完成初始设置。仓库不在这里添加 —— 完成后在 Inbox 主界面随时添加。</p>
+
+     <div id="step1">
+       <h2>第 1 步（共 2 步）· 模型设置</h2>
+       <label class="field">判定模型
+         <input id="w-model" type="text" list="w-models" value="claude-opus-4-8"></label>
+       <datalist id="w-models">
+         <option value="claude-opus-4-8"></option>
+         <option value="claude-sonnet-5"></option>
+         <option value="claude-haiku-4-5-20251001"></option>
+       </datalist>
+       <label class="field">Claude Token（可选。留空 = 使用本机 Claude Code 登录态；sk-ant-… 视为 API Key，其余视为订阅 OAuth token）
+         <input id="w-claude" type="password" autocomplete="off"></label>
+       <div class="actions"><button onclick="go(2)">下一步 →</button></div>
+     </div>
+
+     <div id="step2" style="display:none">
+       <h2>第 2 步（共 2 步）· GitHub 设置</h2>
+       <label class="field">GitHub Token（需要对所监控仓库的写权限：细粒度 PAT 勾 Issues / Pull requests 的 Read and write，或经典 PAT 勾 <code>repo</code>）
+         <input id="w-github" type="password" autocomplete="off"></label>
+       <div class="actions">
+         <button type="button" class="ghost" onclick="go(1)">← 上一步</button>
+         <button onclick="finish()">完成并进入 Inbox</button>
+         <span id="w-msg" class="meta"></span>
+       </div>
+     </div>
+
+     <script>
+     function go(n){
+       document.getElementById('step1').style.display = n===1 ? '' : 'none';
+       document.getElementById('step2').style.display = n===2 ? '' : 'none';
+     }
+     async function finish(){
+       var msg=document.getElementById('w-msg');
+       var gh=document.getElementById('w-github').value.trim();
+       if(!gh){ msg.textContent='❌ GitHub Token 不能为空'; return; }
+       msg.textContent='保存中…';
+       try{
+         var res=await fetch('/settings',{method:'POST',
+           headers:{'content-type':'application/json'},
+           body:JSON.stringify({
+             github_token: gh,
+             claude_token: document.getElementById('w-claude').value.trim(),
+             model: document.getElementById('w-model').value.trim() || 'claude-opus-4-8',
+             repos: []
+           })});
+         var out=await res.json();
+         if(out.ok){ msg.textContent='✅ 已保存，正在进入 Inbox…'; setTimeout(function(){location.href='/inbox'},500); }
+         else{ msg.textContent='❌ '+out.error; }
+       }catch(e){ msg.textContent='❌ '+e; }
+     }
+     </script>`,
+  );
+}
+
+/** Add/remove a watched repo from the Inbox page; saves settings and hot-applies. */
+async function handleRepoMutation(
+  store: Store,
+  action: "add" | "remove",
+  req: IncomingMessage,
+  res: ServerResponse,
+  onSettingsChanged?: (config: AppConfig) => void,
+): Promise<void> {
+  const stored = store.getSettingsRaw();
+  if (!stored) {
+    res.writeHead(302, { location: "/setup" });
+    res.end();
+    return;
+  }
+  const form = new URLSearchParams(await readBody(req));
+  const url = (form.get("url") ?? "").trim();
+  if (!url) {
+    return send(res, 400, page("无效输入", `<p>仓库 URL 不能为空。</p><p><a href="/inbox">← 返回 Inbox</a></p>`));
+  }
+
+  const norm = (u: string): string =>
+    u.replace(/\/+$/, "").replace(/\.git$/, "").toLowerCase();
+  const doc = stored as Record<string, any>;
+  const current: any[] = Array.isArray(doc.repos) ? doc.repos : [];
+  const repos =
+    action === "add"
+      ? current.some((r) => norm(String(r?.url ?? "")) === norm(url))
+        ? current // already watched — saving again is a harmless no-op
+        : [...current, { url, watch: ["issues", "pulls"], only_from_others: true, ignore_authors: [] }]
+      : current.filter((r) => norm(String(r?.url ?? "")) !== norm(url));
+
+  const parsed = parseSettings({ ...doc, repos });
+  if (!parsed.ok) {
+    return send(
+      res,
+      422,
+      page("保存失败", `<h1>❌ 保存失败</h1><p>${esc(parsed.error)}</p><p><a href="/inbox">← 返回 Inbox</a></p>`),
+    );
+  }
+  store.saveSettingsRaw(parsed.settings);
+  // Hot-apply: the hook restarts the engine timer, which immediately runs a cycle —
+  // a newly added repo shows up without waiting for the next interval.
+  onSettingsChanged?.(parsed.config);
+  console.log(`[settings] repo ${action}: ${url}`);
+  res.writeHead(303, { location: "/inbox" });
+  res.end();
 }
 
 // ---- settings panel ----
@@ -732,6 +890,10 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
   .repo input[type=text]{font:inherit;padding:.4rem .6rem;border:1px solid #d0d7de;border-radius:6px;background:#fff;color:inherit}
   .repo .r-url{flex:2;min-width:16rem} .repo .r-ignore{flex:1;min-width:8rem}
   .repo label{font-size:.85rem;color:#57606a;white-space:nowrap}
+  .addrepo{display:flex;gap:.5rem;align-items:center;margin:.6rem 0}
+  .addrepo input{flex:1;min-width:12rem;font:inherit;padding:.45rem .6rem;border:1px solid #d0d7de;border-radius:6px;background:#fff;color:inherit}
+  .addrepo button{margin:0;font-size:.9rem;padding:.45rem .9rem}
+  li.hist form.inline button{margin:0;font-size:.8rem;padding:.1rem .5rem}
   @media(prefers-color-scheme:dark){
     body{background:#0d1117;color:#c9d1d9} pre,li.pt,textarea{background:#161b22;border-color:#30363d}
     h2,.meta,.ev{color:#8b949e} .en{color:#adbac7;border-color:#30363d} a{color:#58a6ff} code{background:#161b22}
@@ -739,7 +901,7 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
     button.ghost{border-color:#30363d;color:#8b949e}
     .chip{background:#161b22;color:#8b949e} .chip.st-replied,.chip.st-executed{background:#12261e;color:#3fb950}
     .chip.st-ignored{background:#161b22;color:#666} .chip.st-superseded{background:#3f2e00;color:#d29922}
-    label.field{color:#8b949e} label.field input,.repo input[type=text]{background:#161b22;border-color:#30363d}
+    label.field{color:#8b949e} label.field input,.repo input[type=text],.addrepo input{background:#161b22;border-color:#30363d}
     .repo label{color:#8b949e}
     pre.code .hl{background:#3f2e00}
     .tabs button{background:#161b22;border-color:#30363d} .tabs button.active{background:#1f6feb;border-color:#1f6feb;color:#fff}
