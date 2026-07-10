@@ -33,11 +33,15 @@ function showWindow() {
   }
   if (!port || !uiToken) return; // core not ready yet; ready handler will open it
   win = new BrowserWindow({
-    width: 1000,
-    height: 820,
+    // Fallback size for when the user un-maximizes; the window opens maximized.
+    width: 1200,
+    height: 860,
+    show: false,
     title: "GH Triage",
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
+  win.maximize();
+  win.show();
   win.loadURL(inboxUrl());
   // Closing the window keeps the app running in the tray (menu-bar app behavior).
   win.on("close", (e) => {

@@ -1020,8 +1020,8 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
     font:15px/1.65 -apple-system,"SF Pro Text",system-ui,"PingFang SC","Microsoft YaHei",sans-serif}
   main{max-width:840px;margin:0 auto;padding:1.5rem 1.5rem 4rem}
   main.wide{max-width:1120px}
-  body.withside main{margin:0 0 0 236px;max-width:900px;padding:1.4rem 2rem 4rem}
-  body.withside main.wide{max-width:1200px}
+  body.withside main{margin:0 0 0 236px;max-width:1600px;padding:1.4rem 2.25rem 4rem}
+  body.withside main.wide{max-width:none}
   a{color:var(--accent)}
   :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
