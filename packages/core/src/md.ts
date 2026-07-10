@@ -52,7 +52,12 @@ function inline(escaped: string): string {
 }
 
 export function mdToHtml(src: string): string {
-  const lines = src.replace(/\r\n/g, "\n").split("\n");
+  // GitHub hides HTML comments (issue/PR templates are full of them) — drop
+  // them BEFORE rendering so template boilerplate doesn't show as text.
+  const lines = src
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/\r\n/g, "\n")
+    .split("\n");
   const out: string[] = [];
   let i = 0;
 
@@ -113,7 +118,13 @@ export function mdToHtml(src: string): string {
       while (i < lines.length) {
         const m = lines[i].match(/^\s*([-*+]|\d+\.)\s+(.*)$/);
         if (!m || /\d/.test(m[1]) !== ordered) break;
-        items.push(`<li>${inline(escapeHtml(m[2]))}</li>`);
+        // GitHub task list: - [ ] / - [x]
+        const task = m[2].match(/^\[([ xX])\]\s+(.*)$/);
+        items.push(
+          task
+            ? `<li class="task"><input type="checkbox" disabled${task[1] === " " ? "" : " checked"}> ${inline(escapeHtml(task[2]))}</li>`
+            : `<li>${inline(escapeHtml(m[2]))}</li>`,
+        );
         i++;
       }
       out.push(ordered ? `<ol>${items.join("")}</ol>` : `<ul>${items.join("")}</ul>`);

@@ -135,6 +135,24 @@ async function fetchTimeline(
         reviewState: r.state,
       });
     }
+    // Inline code comments (anchored to diff lines) — GitHub shows these in the
+    // PR conversation; without them the local history reads emptier than the page.
+    const inline = await gh.paginate(gh.rest.pulls.listReviewComments, {
+      owner,
+      repo,
+      pull_number: number,
+      per_page: 100,
+    });
+    for (const c of inline) {
+      entries.push({
+        kind: "review_comment",
+        author: c.user?.login ?? "unknown",
+        createdAt: c.created_at,
+        body: clipBody(c.body ?? ""),
+        path: c.path,
+        line: c.line ?? c.original_line ?? null,
+      });
+    }
   }
 
   entries.sort((a, b) => a.createdAt.localeCompare(b.createdAt));

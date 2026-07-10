@@ -516,14 +516,17 @@ export class Store {
   }
 }
 
-/** One entry of an item's conversation history (issue comment or PR review). */
+/** One entry of an item's conversation history (issue comment, PR review, or inline code comment). */
 export interface TimelineEntry {
-  kind: "comment" | "review";
+  kind: "comment" | "review" | "review_comment";
   author: string;
   createdAt: string;
   body: string;
   /** review only: APPROVED / CHANGES_REQUESTED / COMMENTED / DISMISSED */
   reviewState?: string;
+  /** review_comment only: which file/line the comment is anchored to */
+  path?: string;
+  line?: number | null;
 }
 
 /** A locally archived issue/PR: metadata + full conversation timeline. */

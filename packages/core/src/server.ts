@@ -1116,11 +1116,17 @@ function userColorClass(author: string): string {
   return `tlu-${h % 6}`;
 }
 
-/** Timeline entry header: author + OP marker + review state + time. */
-function tlHead(author: string, opAuthor: string, e?: { kind: string; reviewState?: string }, at?: string): string {
+/** Timeline entry header: author + OP marker + review state / file anchor + time. */
+function tlHead(
+  author: string,
+  opAuthor: string,
+  e?: { kind: string; reviewState?: string; path?: string; line?: number | null },
+  at?: string,
+): string {
   return `<div class="tlhead"><b>${esc(author)}</b>
     ${author === opAuthor ? `<span class="chip st-op">${t("作者")}</span>` : ""}
     ${e?.kind === "review" ? `<span class="chip st-review">${esc(e.reviewState ?? "REVIEW")}</span>` : ""}
+    ${e?.kind === "review_comment" && e.path ? `<code>${esc(e.path)}${e.line ? `:${e.line}` : ""}</code>` : ""}
     ${at ? `<span class="meta">${esc(fmtWhen(Date.parse(at)))}</span>` : ""}</div>`;
 }
 
@@ -1720,6 +1726,8 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
     display:block;margin:.45rem 0}
   .md a{word-break:break-all}
   .md hr{border:0;border-top:1px solid var(--border2);margin:.7rem 0}
+  .md li.task{list-style:none;margin-left:-1.2rem}
+  .md li.task input{margin-right:.4rem;vertical-align:-1px;accent-color:var(--accent)}
 
   /* buttons */
   button,a.btn{font:inherit;font-size:.88rem;font-weight:600;padding:.45rem 1.05rem;border:0;
