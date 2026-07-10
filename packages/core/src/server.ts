@@ -79,7 +79,6 @@ const EN: Record<string, string> = {
   "判定与轮询": "Judging & polling",
   "判定模型": "Judge model",
   "轮询间隔（分钟）": "Poll interval (minutes)",
-  "首次回看天数": "First-run lookback (days)",
   "语言": "Language",
   "界面语言": "Interface language",
   "展示语言（判定内容给你看的语言：判断依据、草稿预览）": "Display language (what the judge writes for you: rationale, draft previews)",
@@ -948,8 +947,6 @@ function renderSettingsPage(store: Store, engine: TriageEngine): string {
          <input id="s-model" type="text" value="${v(raw.model, "claude-opus-4-8")}"></label>
        <label class="field">${t("轮询间隔（分钟）")}
          <input id="s-interval" type="number" min="1" value="${v(raw.poll_interval_minutes, "5")}"></label>
-       <label class="field">${t("首次回看天数")}
-         <input id="s-lookback" type="number" min="1" value="${v(raw.lookback_days_on_first_run, "7")}"></label>
      </div>
 
      <h2>${icon("globe", 13)} ${t("语言")}</h2>
@@ -999,7 +996,6 @@ function renderSettingsPage(store: Store, engine: TriageEngine): string {
          claude_token:document.getElementById('s-claude').value.trim(),
          model:document.getElementById('s-model').value.trim(),
          poll_interval_minutes:Number(document.getElementById('s-interval').value),
-         lookback_days_on_first_run:Number(document.getElementById('s-lookback').value),
          ui_language:document.getElementById('s-uilang').value,
          display_language:document.getElementById('s-displang').value.trim()||'中文',
          post_language:document.getElementById('s-postlang').value.trim()||'English',

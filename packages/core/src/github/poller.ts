@@ -32,22 +32,21 @@ export async function pollRepo(
   // posted through GITHUB_TOKEN), that self-bump must not re-trigger processing.
   const self = await getSelfLogin();
 
+  // No cursor (fresh repo) = no `since` filter: EVERY currently-open issue/PR is
+  // judged, however old its last activity — closed history is archived, whatever
+  // is still open deserves a draft. MAX_PAGES bounds each cycle; the advancing
+  // cursor lets the following cycles work through the rest.
   const cursor = store.getCursor(repoKey);
-  const since =
-    cursor ??
-    new Date(
-      Date.now() - app.lookback_days_on_first_run * 24 * 60 * 60 * 1000,
-    ).toISOString();
 
   const items: TriageItem[] = [];
-  let maxUpdatedAt = since;
+  let maxUpdatedAt = cursor ?? "";
 
   // issues.listForRepo returns both issues and PRs (PRs carry a pull_request field)
   const iterator = gh.paginate.iterator(gh.rest.issues.listForRepo, {
     owner: rc.owner,
     repo: rc.repo,
     state: "open",
-    since,
+    ...(cursor ? { since: cursor } : {}),
     sort: "updated",
     direction: "asc",
     per_page: 100,

@@ -25,7 +25,6 @@ export const SettingsSchema = z.object({
   claude_token: z.string().default(""),
   poll_interval_minutes: z.number().positive().default(5),
   model: z.string().default("claude-opus-4-8"),
-  lookback_days_on_first_run: z.number().positive().default(7),
   /** App interface language (server-rendered pages) */
   ui_language: z.enum(["zh", "en"]).default("zh"),
   /**
