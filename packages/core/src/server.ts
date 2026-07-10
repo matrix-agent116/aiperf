@@ -244,15 +244,15 @@ function renderSidebar(
   };
 
   return `<aside class="side">
-    <div class="sbrand">🤖 GH Triage</div>
+    <div class="sbrand"><span class="mark">${icon("pr", 15)}</span>GH Triage</div>
     <nav class="snav">
-      ${folder("open", "📥", "待处理", totalOpen)}
+      ${folder("open", icon("inbox"), "待处理", totalOpen)}
       <div class="sgap"></div>
-      ${folder("done", "✅", "已处理", totalDone)}
+      ${folder("done", icon("done"), "已处理", totalDone)}
     </nav>
     <div class="sfoot">
-      ${item("/settings", "设置", { icon: "⚙️", on: active.view === "settings" })}
-      ${item("/logs", "日志", { icon: "📜", on: active.view === "logs" })}
+      ${item("/settings", "设置", { icon: icon("gear"), on: active.view === "settings" })}
+      ${item("/logs", "日志", { icon: icon("logs"), on: active.view === "logs" })}
     </div>
   </aside>`;
 }
@@ -281,7 +281,7 @@ function renderInbox(store: Store, view: "open" | "done", repoFilter?: string): 
       `<h1>已处理${suffix}</h1>
        ${rows
          ? `<div class="panel"><ul class="histlist">${rows}</ul></div>`
-         : `<div class="empty"><span class="big">🗂</span>还没有已处理的记录${suffix ? "" : "<br><span class=\"meta\">回复 / 执行 / 忽略过的卡片会归档到这里</span>"}</div>`}`,
+         : `<div class="empty"><span class="big">${icon("done", 36)}</span>还没有已处理的记录${suffix ? "" : "<br><span class=\"meta\">回复 / 执行 / 忽略过的卡片会归档到这里</span>"}</div>`}`,
       { refreshSeconds: 60, side },
     );
   }
@@ -298,26 +298,26 @@ function renderInbox(store: Store, view: "open" | "done", repoFilter?: string): 
         <span class="chip">${watch.includes("issues") ? "Issues" : ""}${watch.length === 2 ? " + " : ""}${watch.includes("pulls") ? "PRs" : ""}</span>
         <form method="post" action="/repos/remove" class="inline">
           <input type="hidden" name="url" value="${esc(String(r.url ?? ""))}">
-          <button class="ghost" title="停止监控该仓库">✕</button>
+          <button class="ghost" title="停止监控该仓库" aria-label="停止监控该仓库">${icon("x", 13)}</button>
         </form></li>`;
     })
     .join("");
   // Repo management lives on the all-pending view only (folder root, mail-style).
   const repoSection = repoFilter
     ? ""
-    : `<h2>📦 监控的仓库（${watched.length}）</h2>
+    : `<h2>${icon("repo", 13)} 监控的仓库（${watched.length}）</h2>
      <div class="panel">
        ${repoRows ? `<ul class="histlist">${repoRows}</ul>` : ""}
        <form method="post" action="/repos/add" class="addrepo">
          <input type="text" name="url" placeholder="https://github.com/owner/repo" required>
-         <button>＋ 添加仓库</button>
+         <button>${icon("plus", 14)} 添加仓库</button>
        </form>
        <p class="meta" style="margin:.3rem 0 0">高级选项（只看他人 / 忽略作者 / 只看 Issues 或 PRs）在<a href="/settings">设置</a>里调整。</p>
      </div>`;
 
   const emptyState = watched.length
-    ? `<div class="empty"><span class="big">☕️</span>没有待处理的卡片<br><span class="meta">轮询每隔几分钟运行一次，新的判定会自动出现在这里</span></div>`
-    : `<div class="empty"><span class="big">📦</span>还没有监控任何仓库<br><span class="meta">在下方添加一个 GitHub 仓库，轮询就会开始</span></div>`;
+    ? `<div class="empty"><span class="big">${icon("inbox", 36)}</span>没有待处理的卡片<br><span class="meta">轮询每隔几分钟运行一次，新的判定会自动出现在这里</span></div>`
+    : `<div class="empty"><span class="big">${icon("repo", 36)}</span>还没有监控任何仓库<br><span class="meta">在下方添加一个 GitHub 仓库，轮询就会开始</span></div>`;
 
   return page(
     `Inbox (${open.length})`,
@@ -356,7 +356,7 @@ function renderSetupWizard(): string {
     "初始设置",
     `<div class="wizard">
      <div class="whead">
-       <span class="logo">🤖</span>
+       <span class="logo mark">${icon("pr", 26)}</span>
        <h1>欢迎使用 GH Triage</h1>
        <p class="meta">两步完成初始设置。仓库不在这里添加 —— 完成后在 Inbox 主界面随时添加。</p>
      </div>
@@ -487,16 +487,16 @@ function renderSettingsPage(store: Store, engine: TriageEngine): string {
       <label><input class="r-pulls" type="checkbox" ${watch.includes("pulls") ? "checked" : ""}> PRs</label>
       <label title="只处理非维护者发起的条目"><input class="r-others" type="checkbox" ${others ? "checked" : ""}> 仅他人</label>
       <input class="r-ignore" type="text" placeholder="忽略作者,逗号分隔" value="${esc(ignores)}">
-      <button type="button" class="ghost" onclick="this.parentElement.remove()">✕</button>
+      <button type="button" class="ghost" onclick="this.parentElement.remove()" aria-label="移除该仓库">${icon("x", 13)}</button>
     </div>`;
   };
 
   return page(
     "设置",
     `<h1>设置</h1>
-     <p class="meta">引擎状态：${engine.configured ? "🟢 运行中" : "⚪️ 未配置（保存后自动启动）"}</p>
+     <p class="meta">引擎状态：${engine.configured ? `<span class="dot on"></span>运行中` : `<span class="dot"></span>未配置（保存后自动启动）`}</p>
 
-     <h2>🔐 认证</h2>
+     <h2>${icon("lock", 13)} 认证</h2>
      <div class="panel">
        <label class="field">GitHub Token（需要对所监控仓库的写权限）
          <input id="s-github" type="password" autocomplete="off" value="${v(raw.github_token, "")}"></label>
@@ -504,7 +504,7 @@ function renderSettingsPage(store: Store, engine: TriageEngine): string {
          <input id="s-claude" type="password" autocomplete="off" value="${v(raw.claude_token, "")}"></label>
      </div>
 
-     <h2>🧠 判定与轮询</h2>
+     <h2>${icon("cpu", 13)} 判定与轮询</h2>
      <div class="panel grid">
        <label class="field">判定模型
          <input id="s-model" type="text" value="${v(raw.model, "claude-opus-4-8")}"></label>
@@ -514,15 +514,15 @@ function renderSettingsPage(store: Store, engine: TriageEngine): string {
          <input id="s-lookback" type="number" min="1" value="${v(raw.lookback_days_on_first_run, "7")}"></label>
      </div>
 
-     <h2>📦 仓库</h2>
+     <h2>${icon("repo", 13)} 仓库</h2>
      <div class="panel">
        <div id="repos">${repos.map(repoRow).join("")}</div>
-       <button type="button" class="ghost" onclick="addRepo()">＋ 添加仓库</button>
+       <button type="button" class="ghost" onclick="addRepo()">${icon("plus", 14)} 添加仓库</button>
        <template id="repo-tpl">${repoRow({})}</template>
      </div>
 
      <div class="actions" style="margin-top:1.5rem">
-       <button onclick="save()">💾 保存并应用</button>
+       <button onclick="save()">${icon("save", 14)} 保存并应用</button>
        <span id="s-msg" class="meta"></span>
      </div>
 
@@ -605,34 +605,34 @@ function renderInboxCard(p: PendingDecision): string {
   const d = p.decision;
   const conf = Math.round(d.confidence * 100);
   const tok = `<input type="hidden" name="token" value="${esc(p.token)}">`;
-  const ignoreForm = `<form method="post" action="/card/${p.id}/ignore" class="inline">${tok}<button class="ghost">🚫 忽略</button></form>`;
+  const ignoreForm = `<form method="post" action="/card/${p.id}/ignore" class="inline">${tok}<button class="ghost">${icon("ban", 14)} 忽略</button></form>`;
 
   let body: string;
   if (d.needsReply && p.itemType === "pull_request") {
     const url = `/review/${p.id}?t=${encodeURIComponent(p.token)}`;
-    body = `<p>🔎 PR 审查意见 <b>${d.reviewPoints.length}</b> 条</p>
-      <div class="actions"><a class="btn" href="${url}">🔎 逐条审核并提交</a>${ignoreForm}</div>`;
+    body = `<p>${icon("search", 14)} PR 审查意见 <b>${d.reviewPoints.length}</b> 条</p>
+      <div class="actions"><a class="btn" href="${url}">${icon("search", 14)} 逐条审核并提交</a>${ignoreForm}</div>`;
   } else if (d.needsReply) {
     const en = d.draftReply ?? "";
     const zh = d.draftReplyZh?.trim();
-    body = `<details><summary>💬 草稿回复（点开审阅/编辑）</summary>
+    body = `<details><summary>${icon("msg", 14)} 草稿回复（点开审阅/编辑）</summary>
       ${zh ? `<div class="lang-zh"><pre>${esc(zh)}</pre></div>` : ""}
       <form method="post" action="/card/${p.id}/reply">${tok}
         <textarea name="body" rows="6">${esc(en)}</textarea>
-        <div class="actions"><button>✅ 批准并回复</button></div>
+        <div class="actions"><button>${icon("check", 14)} 批准并回复</button></div>
       </form></details>
       <div class="actions">${ignoreForm}</div>`;
   } else {
     const label = ACTION_LABEL[d.suggestedAction];
     const labels =
       d.suggestedAction === "add_labels" && d.labels.length
-        ? `<p>🏷 ${esc(d.labels.join(", "))}</p>`
+        ? `<p>${icon("tag", 14)} ${esc(d.labels.join(", "))}</p>`
         : "";
     const act =
       d.suggestedAction === "none"
         ? ""
-        : `<form method="post" action="/card/${p.id}/act" class="inline">${tok}<button>✅ 执行「${esc(label)}」</button></form>`;
-    body = `<p>🛠 建议动作: <b>${esc(label)}</b></p>${labels}
+        : `<form method="post" action="/card/${p.id}/act" class="inline">${tok}<button>${icon("check", 14)} 执行「${esc(label)}」</button></form>`;
+    body = `<p>${icon("wrench", 14)} 建议动作: <b>${esc(label)}</b></p>${labels}
       <div class="actions">${act}${ignoreForm}</div>`;
   }
 
@@ -642,9 +642,9 @@ function renderInboxCard(p: PendingDecision): string {
       : `<span class="tag tag-issue">Issue</span>`;
   return `<div class="card">
     <div class="cardhead">${tag}<b>${esc(p.owner)}/${esc(p.repo)}</b><span>#${p.number}</span>
-      <a class="ext" href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">在 GitHub 打开 ↗</a></div>
+      <a class="ext" href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">在 GitHub 打开 ${icon("ext", 12)}</a></div>
     <div class="title">${esc(clip(p.title, 200))}</div>
-    <div class="reasoning">🧠 ${esc(clip(d.reasoning, 600))} <span class="meta">（置信度 ${conf}%）</span></div>
+    <div class="reasoning">${icon("spark", 14)} ${esc(clip(d.reasoning, 600))} <span class="meta">（置信度 ${conf}%）</span></div>
     ${body}
   </div>`;
 }
@@ -705,7 +705,7 @@ function serveReply(store: Store, id: string, res: ServerResponse): void {
     page(
       `${p.owner}/${p.repo} #${p.number}`,
       `<h1><span class="tag ${p.itemType === "pull_request" ? "tag-pr" : "tag-issue"}">${typeLabel}</span> ${esc(p.owner)}/${esc(p.repo)} #${p.number}</h1>
-       <p class="meta"><a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">在 GitHub 打开 ↗</a> · <span class="chip st-${esc(p.status)}">${esc(STATUS_LABEL[p.status] ?? p.status)}</span></p>
+       <p class="meta"><a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">在 GitHub 打开 ${icon("ext", 12)}</a> · <span class="chip st-${esc(p.status)}">${esc(STATUS_LABEL[p.status] ?? p.status)}</span></p>
        <h2>判断依据</h2><p>${esc(p.decision.reasoning)}</p>
        ${LANG_TABS}
        <div class="lang-zh"><h2>草稿回复（中文，仅供理解）</h2><pre>${esc(zh)}</pre></div>
@@ -795,8 +795,8 @@ function renderReviewPage(p: PendingDecision, side: string): string {
   return page(
     `Review ${p.owner}/${p.repo} #${p.number}`,
     `<h1><span class="tag tag-pr">PR</span> ${esc(p.owner)}/${esc(p.repo)} #${p.number}</h1>
-     <p class="meta"><a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">在 GitHub 打开 ↗</a> · <span class="chip st-${esc(p.status)}">${esc(STATUS_LABEL[p.status] ?? p.status)}</span></p>
-     <h2>🧠 判断依据（置信度 ${Math.round(d.confidence * 100)}%）</h2>
+     <p class="meta"><a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">在 GitHub 打开 ${icon("ext", 12)}</a> · <span class="chip st-${esc(p.status)}">${esc(STATUS_LABEL[p.status] ?? p.status)}</span></p>
+     <h2>${icon("spark", 13)} 判断依据（置信度 ${Math.round(d.confidence * 100)}%）</h2>
      <div class="panel">${esc(d.reasoning)}</div>
      ${inner}
      ${diffSection}`,
@@ -998,18 +998,29 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
 <style>
   *,*::before,*::after{box-sizing:border-box}
   :root{
-    --bg:#f2f4f8;--surface:#fff;--surface2:#f5f7fa;--border:#e3e7ee;--border2:#edf0f5;
-    --text:#141a22;--muted:#5f6b7a;--faint:#98a2b3;
-    --accent:#2f6bff;--accent-bg:#ebf1ff;--ok:#1a7f37;--ok-bg:#e6f6ea;--danger:#c93a3a;
-    --shadow:0 1px 2px rgba(20,30,50,.06),0 2px 6px rgba(20,30,50,.05);
-    --shadow-lg:0 6px 20px rgba(20,30,50,.12);--r:12px;
+    --bg:#f4f6fa;--surface:#fff;--surface2:#f6f8fb;--border:#e2e8f0;--border2:#eef2f7;
+    --text:#0f172a;--muted:#64748b;--faint:#94a3b8;
+    --accent:#2f6bff;--accent-bg:#ebf1ff;--ok:#15803d;--ok-bg:#e7f5eb;--danger:#c53030;
+    --shadow:0 1px 2px rgba(15,23,42,.06),0 2px 6px rgba(15,23,42,.05);
+    --shadow-lg:0 6px 20px rgba(15,23,42,.12);--r:12px;
   }
   @media(prefers-color-scheme:dark){:root{
-    --bg:#0c0f14;--surface:#151a21;--surface2:#1b212b;--border:#2a3240;--border2:#222936;
-    --text:#e4e9f0;--muted:#94a0b2;--faint:#6a7787;
-    --accent:#5f8dff;--accent-bg:#1a2540;--ok:#41c463;--ok-bg:#15281c;--danger:#ee7b7b;
+    --bg:#0b1120;--surface:#111a2e;--surface2:#182338;--border:#263450;--border2:#1e2a42;
+    --text:#e6ecf5;--muted:#93a4bc;--faint:#64748b;
+    --accent:#6494ff;--accent-bg:#1a2a4d;--ok:#3fce6f;--ok-bg:#12291c;--danger:#f27676;
     --shadow:0 1px 2px rgba(0,0,0,.5);--shadow-lg:0 8px 24px rgba(0,0,0,.55);
   }}
+  svg.i{flex:none;vertical-align:-2px}
+  h2 svg.i{margin-right:.15rem;vertical-align:-2px}
+  .mark{display:inline-flex;align-items:center;justify-content:center;flex:none;
+    width:1.65rem;height:1.65rem;border-radius:8px;background:var(--accent);color:#fff;margin-right:.55rem}
+  .dot{display:inline-block;width:.55rem;height:.55rem;border-radius:50%;
+    background:var(--faint);margin-right:.4rem;vertical-align:1px}
+  .dot.on{background:#22c55e}
+  .scount,.count,.navbadge,li.hist .when,.logbox{font-variant-numeric:tabular-nums}
+  .empty .big svg.i{opacity:.4}
+  summary,label{cursor:pointer}
+  @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
   body{margin:0;background:var(--bg);color:var(--text);
     font:15px/1.65 -apple-system,"SF Pro Text",system-ui,"PingFang SC","Microsoft YaHei",sans-serif}
   main{max-width:840px;margin:0 auto;padding:1.5rem 1.5rem 4rem}
@@ -1023,7 +1034,8 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
   .side{position:fixed;top:0;bottom:0;left:0;width:236px;z-index:20;
     display:flex;flex-direction:column;background:var(--surface);
     border-right:1px solid var(--border);padding:.85rem .6rem .7rem;overflow-y:auto}
-  .sbrand{font-weight:700;font-size:.95rem;letter-spacing:.01em;padding:.2rem .6rem .8rem}
+  .sbrand{display:flex;align-items:center;font-weight:700;font-size:.95rem;letter-spacing:.01em;padding:.2rem .6rem .8rem}
+  .side a .ic{display:inline-flex;align-items:center;justify-content:center}
   .snav{display:flex;flex-direction:column;gap:1px}
   .sgap{height:.9rem}
   .side a{display:flex;align-items:center;gap:.45rem;padding:.32rem .6rem;border-radius:8px;
@@ -1160,7 +1172,7 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
   .wizard{max-width:560px;margin:2.5rem auto 0}
   .wizard h1{margin:.4rem 0 .3rem}
   .whead{text-align:center;margin-bottom:1.6rem}
-  .whead .logo{font-size:2.4rem;display:block}
+  .whead .logo{display:flex;width:3rem;height:3rem;border-radius:14px;margin:0 auto .7rem}
   .steps{display:flex;align-items:center;gap:.7rem;margin:1.4rem 0;font-size:.86rem;font-weight:600}
   .step{display:inline-flex;align-items:center;gap:.5rem;color:var(--faint)}
   .step .dot{width:1.55rem;height:1.55rem;border-radius:50%;display:inline-flex;align-items:center;
@@ -1194,6 +1206,33 @@ document.addEventListener('toggle',function(e){
   t.remove();
 },true);
 </script></body></html>`;
+}
+
+// ---- inline SVG icons (Lucide outlines, stroke 2 — no emoji as UI icons) ----
+const ICON_PATHS: Record<string, string> = {
+  inbox: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  done: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+  gear: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+  logs: '<path d="M15 12h-5"/><path d="M15 8h-5"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/>',
+  plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  ext: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  spark: '<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  ban: '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
+  save: '<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  msg: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  repo: '<path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="M3.3 7 12 12l8.7-5"/><path d="M12 22V12"/>',
+  wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  lock: '<rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  cpu: '<rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/>',
+  pr: '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M6 9v12"/>',
+  tag: '<path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+};
+function icon(name: string, size = 16): string {
+  return `<svg class="i" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] ?? ""}</svg>`;
 }
 
 function esc(s: string): string {
