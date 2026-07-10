@@ -656,9 +656,19 @@ function renderItemPage(store: Store, owner: string, repo: string, number: numbe
     (it.ghClosedAt ? ` · ${t("关闭于")} ${esc(fmtWhen(Date.parse(it.ghClosedAt)))}` : "") +
     `</span>`;
 
-  const entryLi = (e: { kind: string; author: string; createdAt: string; body: string; reviewState?: string }): string =>
+  const entryLi = (e: {
+    kind: string;
+    author: string;
+    createdAt: string;
+    body: string;
+    reviewState?: string;
+    path?: string;
+    line?: number | null;
+    diffHunk?: string;
+  }): string =>
     `<li class="${userColorClass(e.author)}">
       ${tlHead(e.author, it.author, e, e.createdAt)}
+      ${tlHunk(e)}
       ${e.body.trim() ? `<div class="tlbody md">${mdToHtml(e.body)}</div>` : ""}</li>`;
 
   const timeline = it.timeline.length
@@ -1154,6 +1164,19 @@ function tlHead(
     ${at ? `<span class="meta">${esc(fmtWhen(Date.parse(at)))}</span>` : ""}</div>`;
 }
 
+/** The code snippet an inline review comment is anchored to (+/- colored, no line numbers). */
+function tlHunk(e: { diffHunk?: string }): string {
+  if (!e.diffHunk?.trim()) return "";
+  const rows = e.diffHunk
+    .split("\n")
+    .map((l) => {
+      const cls = l.startsWith("+") ? "da" : l.startsWith("-") ? "dd" : l.startsWith("@@") ? "dh" : "";
+      return `<div${cls ? ` class="${cls}"` : ""}>${esc(l)}</div>`;
+    })
+    .join("");
+  return `<pre class="code tlhunk">${rows}</pre>`;
+}
+
 /** Collapsed conversation history under a pending card (from the local archive). */
 const CARD_HISTORY_MAX = 20;
 function renderCardHistory(store: Store, p: PendingDecision): string {
@@ -1170,6 +1193,7 @@ function renderCardHistory(store: Store, p: PendingDecision): string {
   const entries = recent
     .map(
       (e) => `<li class="${userColorClass(e.author)}">${tlHead(e.author, it.author, e, e.createdAt)}
+        ${tlHunk(e)}
         ${e.body.trim() ? `<div class="tlbody md">${mdToHtml(clipMd(e.body, 600))}</div>` : ""}</li>`,
     )
     .join("");
@@ -1745,6 +1769,7 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
   .tlhead .chip{font-size:.68rem}
   .tlbody{white-space:pre-wrap;word-wrap:break-word;font-size:.88rem;line-height:1.55;
     margin-top:.3rem;color:var(--text)}
+  .tlhunk{margin:.4rem 0 .1rem;font-size:.76rem;max-height:14rem;overflow:auto}
   .tlbody.md{white-space:normal}
   .md p{margin:.35rem 0}
   .md pre{margin:.5rem 0;font-size:.8rem}

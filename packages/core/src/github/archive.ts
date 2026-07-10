@@ -151,12 +151,24 @@ async function fetchTimeline(
         body: clipBody(c.body ?? ""),
         path: c.path,
         line: c.line ?? c.original_line ?? null,
+        // GitHub shows the anchored code with the comment; keep the hunk header
+        // plus the last few lines (what the conversation view displays).
+        diffHunk: clipHunk(c.diff_hunk ?? ""),
       });
     }
   }
 
   entries.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   return entries.slice(0, MAX_TIMELINE);
+}
+
+/** Hunk header + at most the last 8 lines — GitHub's conversation view shows the tail. */
+function clipHunk(hunk: string): string {
+  if (!hunk) return "";
+  const lines = hunk.split("\n");
+  const header = lines[0]?.startsWith("@@") ? [lines[0]] : [];
+  const rest = lines.slice(header.length);
+  return [...header, ...rest.slice(-8)].join("\n");
 }
 
 function clipBody(s: string): string {

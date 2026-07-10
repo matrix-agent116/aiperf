@@ -527,6 +527,8 @@ export interface TimelineEntry {
   /** review_comment only: which file/line the comment is anchored to */
   path?: string;
   line?: number | null;
+  /** review_comment only: the diff hunk the comment is anchored to (tail lines) */
+  diffHunk?: string;
 }
 
 /** A locally archived issue/PR: metadata + full conversation timeline. */

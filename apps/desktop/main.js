@@ -5,6 +5,7 @@ import {
   Notification,
   Tray,
   nativeImage,
+  shell,
   utilityProcess,
 } from "electron";
 import path from "node:path";
@@ -43,6 +44,18 @@ function showWindow() {
   win.maximize();
   win.show();
   win.loadURL(inboxUrl());
+  // External links (在 GitHub 打开 etc.) go to the system browser — never a
+  // child Electron window; the app window itself stays on the local UI.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+  win.webContents.on("will-navigate", (e, url) => {
+    if (!url.startsWith(`http://127.0.0.1:`)) {
+      e.preventDefault();
+      if (/^https?:\/\//.test(url)) shell.openExternal(url);
+    }
+  });
   // There is no Edit menu (the app menu is quit-only), so macOS won't dispatch
   // the standard edit key equivalents to the page — wire them up by hand.
   win.webContents.on("before-input-event", (e, input) => {

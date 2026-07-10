@@ -51,13 +51,14 @@ function inline(escaped: string): string {
   return s.replace(/\u0000(\d+)\u0000/g, (_, i: string) => `<code>${codes[Number(i)] ?? ""}</code>`);
 }
 
+/** GitHub hides HTML comments (and an unterminated one hides to EOF) — match that. */
+function stripComments(src: string): string {
+  return src.replace(/<!--[\s\S]*?-->/g, "").replace(/<!--[\s\S]*$/, "");
+}
+
 export function mdToHtml(src: string): string {
-  // GitHub hides HTML comments (issue/PR templates are full of them) — drop
-  // them BEFORE rendering so template boilerplate doesn't show as text.
-  const lines = src
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/\r\n/g, "\n")
-    .split("\n");
+  // Drop hidden comments BEFORE rendering so template boilerplate isn't shown.
+  const lines = stripComments(src).replace(/\r\n/g, "\n").split("\n");
   const out: string[] = [];
   let i = 0;
 
@@ -144,10 +145,16 @@ export function mdToHtml(src: string): string {
   return out.join("");
 }
 
-/** Clip markdown SOURCE without leaving an unclosed code fence behind. */
+/**
+ * Clip markdown SOURCE without leaving an unclosed code fence behind.
+ * Comments are stripped FIRST: clipping must not cut one open (a half
+ * comment would escape the renderer's stripping and show as text), and
+ * hidden text must not eat the clip budget.
+ */
 export function clipMd(src: string, max: number): string {
-  if (src.length <= max) return src;
-  let c = src.slice(0, max) + "…";
+  const clean = stripComments(src);
+  if (clean.length <= max) return clean;
+  let c = clean.slice(0, max) + "…";
   const fences = (c.match(/^\s*```/gm) ?? []).length;
   if (fences % 2 === 1) c += "\n```";
   return c;
