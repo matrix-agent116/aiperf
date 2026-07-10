@@ -529,13 +529,17 @@ function renderInboxCard(p: PendingDecision): string {
       <div class="actions"><a class="btn" href="${url}">${icon("search", 14)} 逐条审核并提交</a>${ignoreForm}</div>`;
   } else if (d.needsReply) {
     const en = d.draftReply ?? "";
-    const zh = d.draftReplyZh?.trim();
+    const zh = d.draftReplyZh?.trim() || en; // old cards may lack the Chinese draft
     body = `<details><summary>${icon("msg", 14)} 草稿回复（点开审阅/编辑）</summary>
-      ${zh ? `<div class="lang-zh"><pre>${esc(zh)}</pre></div>` : ""}
-      <form method="post" action="/card/${p.id}/reply">${tok}
-        <textarea name="body" rows="6">${esc(en)}</textarea>
-        <div class="actions"><button>${icon("check", 14)} 批准并回复</button></div>
-      </form></details>
+      <div class="draft">
+        ${LANG_TABS}
+        <div class="lang-zh"><p class="meta">中文草稿（仅供理解，不会发布）</p><pre>${esc(zh)}</pre></div>
+        <form method="post" action="/card/${p.id}/reply">${tok}
+          <div class="lang-en"><p class="meta">English draft（实际发布到 GitHub 的内容，可编辑）</p>
+            <textarea name="body" rows="6">${esc(en)}</textarea></div>
+          <div class="actions"><button>${icon("check", 14)} 批准并回复</button></div>
+        </form>
+      </div></details>
       <div class="actions">${ignoreForm}</div>`;
   } else {
     const label = ACTION_LABEL[d.suggestedAction];
@@ -1057,6 +1061,10 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
   /* language tabs */
   .tabs{display:inline-flex;background:var(--surface2);border:1px solid var(--border);
     border-radius:9px;padding:2px;gap:2px;margin:1rem 0}
+  .draft{padding:.3rem .9rem .8rem}
+  .draft .tabs{margin:.5rem 0 .3rem}
+  .draft .meta{margin:.3rem 0}
+  .draft pre{margin:.3rem 0 .5rem}
   .tabs button{background:transparent;color:var(--muted);border-radius:7px;
     padding:.22rem .95rem;font-size:.84rem;box-shadow:none}
   .tabs button:hover{filter:none;color:var(--text)}
