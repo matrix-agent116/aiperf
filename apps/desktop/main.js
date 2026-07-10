@@ -37,7 +37,7 @@ function showWindow() {
     width: 1200,
     height: 860,
     show: false,
-    title: "GH Triage",
+    title: "Git Triage",
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
   win.maximize();
@@ -115,7 +115,7 @@ function startCore() {
 function buildTray() {
   tray = new Tray(nativeImage.createEmpty());
   tray.setTitle("📥");
-  tray.setToolTip("GH Triage");
+  tray.setToolTip("Git Triage");
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: "打开 Inbox", click: showWindow },

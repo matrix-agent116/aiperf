@@ -34,7 +34,7 @@
   },
   "build": {
     "appId": "com.ghtriage.app",
-    "productName": "GH Triage",
+    "productName": "Git Triage",
     "asar": false,
     "directories": {
       "output": "dist"
