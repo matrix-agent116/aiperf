@@ -23,7 +23,7 @@ export interface PendingDecision {
   title: string;
   decision: Decision;
   draftReply: string | null;
-  chatId: string;
+  /** Non-null once the card has been surfaced to the human (reminders key off this) */
   messageId: number | null;
   status: PendingStatus;
   createdAt: number;
@@ -63,7 +63,7 @@ const COLS_NO_CTX =
  * Persistence:
  *  - cursors: last poll timestamp per repo
  *  - processed: fingerprints of already-handled (item + updated_at), dedupe guard
- *  - pending: decisions pushed to Telegram, awaiting human confirmation
+ *  - pending: judged decisions surfaced to the human, awaiting confirmation
  */
 export class Store {
   private db: DatabaseSync;
@@ -73,6 +73,10 @@ export class Store {
     this.db = new DatabaseSync(path);
     this.db.exec(`
       PRAGMA journal_mode = WAL;
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS cursors (
         repo TEXT PRIMARY KEY,
         last_polled_at TEXT NOT NULL
@@ -115,6 +119,45 @@ export class Store {
     }
   }
 
+  // ---- app settings (edited on the settings page; single JSON document) ----
+  getSettingsRaw(): unknown | null {
+    const row = this.db
+      .prepare("SELECT value FROM settings WHERE key = 'app'")
+      .get() as { value: string } | undefined;
+    if (!row) return null;
+    try {
+      return JSON.parse(row.value);
+    } catch {
+      return null;
+    }
+  }
+
+  saveSettingsRaw(value: unknown): void {
+    this.db
+      .prepare(
+        `INSERT INTO settings (key, value) VALUES ('app', ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      )
+      .run(JSON.stringify(value));
+  }
+
+  /**
+   * Session token gating the whole local web UI: only the app's own window (whose
+   * URL carries it) can reach the pages, not arbitrary local processes. Persisted
+   * so headless users can bookmark the URL across restarts.
+   */
+  getOrCreateUiToken(): string {
+    const row = this.db
+      .prepare("SELECT value FROM settings WHERE key = 'ui_token'")
+      .get() as { value: string } | undefined;
+    if (row) return row.value;
+    const token = randomBytes(16).toString("base64url");
+    this.db
+      .prepare("INSERT INTO settings (key, value) VALUES ('ui_token', ?)")
+      .run(token);
+    return token;
+  }
+
   // ---- cursors ----
   getCursor(repo: string): string | null {
     const row = this.db
@@ -154,7 +197,7 @@ export class Store {
       "id" | "messageId" | "status" | "createdAt" | "remindedAt" | "token"
     >,
   ): PendingDecision {
-    const id = randomBytes(6).toString("base64url"); // short, fits Telegram's 64-byte callback_data limit
+    const id = randomBytes(6).toString("base64url"); // short, URL-friendly
     const record: PendingDecision = {
       ...input,
       id,
@@ -182,7 +225,8 @@ export class Store {
         record.title,
         JSON.stringify(record.decision),
         record.draftReply,
-        record.chatId,
+        // chat_id survives as a legacy NOT NULL column from the Telegram era
+        "",
         record.messageId,
         record.status,
         record.createdAt,
@@ -259,14 +303,33 @@ export class Store {
       .run(Date.now(), id);
   }
 
-  /** The pending item in a chat currently awaiting edited reply text (at most one) */
-  findAwaitingEdit(chatId: string): PendingDecision | null {
+  /** Open cards (pending / awaiting_edit) awaiting the human, newest first. */
+  listOpen(): PendingDecision[] {
+    const rows = this.db
+      .prepare(
+        `SELECT ${COLS_NO_CTX} FROM pending
+         WHERE status IN ('pending', 'awaiting_edit')
+         ORDER BY created_at DESC`,
+      )
+      .all() as unknown as PendingRow[];
+    return rows.map(rowToPending);
+  }
+
+  /** Most recent cards regardless of status (history view). */
+  listRecent(limit = 30): PendingDecision[] {
+    const rows = this.db
+      .prepare(`SELECT ${COLS_NO_CTX} FROM pending ORDER BY created_at DESC LIMIT ?`)
+      .all(limit) as unknown as PendingRow[];
+    return rows.map(rowToPending);
+  }
+
+  countOpen(): number {
     const row = this.db
       .prepare(
-        `SELECT ${COLS_NO_CTX} FROM pending WHERE chat_id = ? AND status = 'awaiting_edit' ORDER BY created_at DESC LIMIT 1`,
+        "SELECT COUNT(*) AS n FROM pending WHERE status IN ('pending', 'awaiting_edit')",
       )
-      .get(chatId) as PendingRow | undefined;
-    return row ? rowToPending(row) : null;
+      .get() as { n: number };
+    return row.n;
   }
 
   close(): void {
@@ -285,7 +348,6 @@ function rowToPending(row: PendingRow): PendingDecision {
     title: row.title,
     decision: JSON.parse(row.decision_json) as Decision,
     draftReply: row.draft_reply,
-    chatId: row.chat_id,
     messageId: row.message_id,
     status: row.status as PendingStatus,
     createdAt: row.created_at,

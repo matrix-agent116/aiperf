@@ -1,24 +1,22 @@
 {
   "name": "gh-triage-agent",
-  "version": "0.1.0",
-  "description": "配置驱动多仓库轮询 + 人在环路的 GitHub Issue/PR 判定 Agent（Claude Agent SDK + Telegram）",
+  "version": "0.2.0",
+  "description": "配置驱动多仓库轮询 + 人在环路的 GitHub Issue/PR 判定 Agent（Claude Agent SDK + 桌面 App）",
+  "private": true,
   "type": "module",
   "engines": {
     "node": ">=22"
   },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
-    "typecheck": "tsc",
-    "start": "node src/index.ts",
-    "poll-once": "node src/index.ts --once",
-    "dev": "node --watch src/index.ts"
-  },
-  "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.1.0",
-    "@octokit/rest": "^21.0.0",
-    "dotenv": "^16.4.0",
-    "grammy": "^1.30.0",
-    "yaml": "^2.5.0",
-    "zod": "^3.23.0"
+    "app": "npm start --workspace gh-triage-desktop",
+    "headless": "node packages/core/src/headless.ts",
+    "poll-once": "node packages/core/src/headless.ts --once",
+    "dev": "node --watch packages/core/src/headless.ts",
+    "typecheck": "tsc -p packages/core"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

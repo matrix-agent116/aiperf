@@ -1,0 +1,15 @@
+{
+  "name": "gh-triage-core",
+  "version": "0.2.0",
+  "description": "gh-triage 核心引擎：轮询 + 判定 + 状态 + GitHub 写回 + 本地 UI 页面",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.1.0",
+    "@octokit/rest": "^21.0.0",
+    "zod": "^3.23.0"
+  }
+}

@@ -12,6 +12,7 @@
     "resolveJsonModule": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
     "verbatimModuleSyntax": false
   },
   "include": ["src/**/*.ts"],

@@ -1,0 +1,14 @@
+{
+  "name": "gh-triage-desktop",
+  "version": "0.2.0",
+  "description": "gh-triage macOS/Linux 桌面壳（Electron）",
+  "private": true,
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^43.0.0"
+  }
+}

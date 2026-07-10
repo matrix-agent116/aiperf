@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, access } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { requireEnv } from "../config.ts";
+import { getGithubToken } from "../github/client.ts";
 import type { TriageItem } from "../types.ts";
 
 const pexec = promisify(execFile);
@@ -55,8 +55,7 @@ export async function preparePrCheckout(item: TriageItem): Promise<string | null
 }
 
 function authUrl(owner: string, repo: string): string {
-  const token = requireEnv("GITHUB_TOKEN");
-  return `https://x-access-token:${token}@github.com/${owner}/${repo}.git`;
+  return `https://x-access-token:${getGithubToken()}@github.com/${owner}/${repo}.git`;
 }
 
 async function git(dir: string, args: string[]): Promise<void> {
