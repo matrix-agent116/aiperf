@@ -34,7 +34,7 @@
   },
   "build": {
     "appId": "com.ghtriage.app",
-    "productName": "Git Triage",
+    "productName": "GitTriage",
     "artifactName": "GitTriage-${version}-${arch}.${ext}",
     "asar": false,
     "directories": {
