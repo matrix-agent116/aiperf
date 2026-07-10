@@ -191,35 +191,35 @@ function renderInbox(store: Store): string {
   const repoRows = repos
     .map((r) => {
       const watch: string[] = Array.isArray(r.watch) ? r.watch : ["issues", "pulls"];
-      return `<li class="hist"><code>${esc(String(r.url ?? ""))}</code>
-        <span class="meta">${watch.includes("issues") ? "Issues" : ""}${watch.length === 2 ? " + " : ""}${watch.includes("pulls") ? "PRs" : ""}</span>
+      return `<li class="hist"><code>${esc(String(r.url ?? "").replace(/^https?:\/\/(www\.)?github\.com\//i, ""))}</code>
+        <span class="chip">${watch.includes("issues") ? "Issues" : ""}${watch.length === 2 ? " + " : ""}${watch.includes("pulls") ? "PRs" : ""}</span>
         <form method="post" action="/repos/remove" class="inline">
           <input type="hidden" name="url" value="${esc(String(r.url ?? ""))}">
           <button class="ghost" title="停止监控该仓库">✕</button>
         </form></li>`;
     })
     .join("");
-  const repoSection = `<h2>📦 监控的仓库 <span class="meta">(${repos.length})</span></h2>
-     ${repos.length
-       ? `<ul class="histlist">${repoRows}</ul>`
-       : `<p class="meta">还没有监控任何仓库 —— 在下面添加一个，轮询就会开始。</p>`}
-     <form method="post" action="/repos/add" class="addrepo">
-       <input type="text" name="url" placeholder="https://github.com/owner/repo" required>
-       <button>＋ 添加仓库</button>
-     </form>
-     <p class="meta">仓库的高级选项（只看他人 / 忽略作者 / 只看 Issues 或 PRs）在<a href="/settings">设置</a>里调整。</p>`;
+  const repoSection = `<h2>📦 监控的仓库（${repos.length}）</h2>
+     <div class="panel">
+       ${repos.length ? `<ul class="histlist">${repoRows}</ul>` : ""}
+       <form method="post" action="/repos/add" class="addrepo">
+         <input type="text" name="url" placeholder="https://github.com/owner/repo" required>
+         <button>＋ 添加仓库</button>
+       </form>
+       <p class="meta" style="margin:.3rem 0 0">高级选项（只看他人 / 忽略作者 / 只看 Issues 或 PRs）在<a href="/settings">设置</a>里调整。</p>
+     </div>`;
 
-  const emptyHint = repos.length
-    ? `<p class="meta">没有待处理的卡片。轮询会自动带来新的判定。</p>`
-    : "";
+  const emptyState = repos.length
+    ? `<div class="empty"><span class="big">☕️</span>没有待处理的卡片<br><span class="meta">轮询每隔几分钟运行一次，新的判定会自动出现在这里</span></div>`
+    : `<div class="empty"><span class="big">📦</span>还没有监控任何仓库<br><span class="meta">在下方添加一个 GitHub 仓库，轮询就会开始</span></div>`;
 
   return page(
     `Inbox (${open.length})`,
-    `<h1>📥 待处理 <span class="count">${open.length}</span> <a class="gear" href="/settings" title="设置">⚙️</a></h1>
-     ${cards || emptyHint}
+    `<h1>待处理${open.length ? `<span class="count">${open.length}</span>` : ""}</h1>
+     ${cards || emptyState}
      ${repoSection}
-     ${history ? `<h2>最近处理</h2><ul class="histlist">${history}</ul>` : ""}`,
-    { refreshSeconds: 60 },
+     ${history ? `<h2>🕘 最近处理</h2><div class="panel"><ul class="histlist">${history}</ul></div>` : ""}`,
+    { refreshSeconds: 60, nav: "inbox", badge: open.length },
   );
 }
 
@@ -228,11 +228,20 @@ function renderInbox(store: Store): string {
 function renderSetupWizard(): string {
   return page(
     "初始设置",
-    `<h1>👋 欢迎使用 GitHub Triage</h1>
-     <p class="meta">两步完成初始设置。仓库不在这里添加 —— 完成后在 Inbox 主界面随时添加。</p>
+    `<div class="wizard">
+     <div class="whead">
+       <span class="logo">🤖</span>
+       <h1>欢迎使用 GH Triage</h1>
+       <p class="meta">两步完成初始设置。仓库不在这里添加 —— 完成后在 Inbox 主界面随时添加。</p>
+     </div>
 
-     <div id="step1">
-       <h2>第 1 步（共 2 步）· 模型设置</h2>
+     <div class="steps">
+       <span class="step on" id="ind1"><span class="dot">1</span>模型设置</span>
+       <span class="line"></span>
+       <span class="step" id="ind2"><span class="dot">2</span>GitHub 设置</span>
+     </div>
+
+     <div class="panel" id="step1">
        <label class="field">判定模型
          <input id="w-model" type="text" list="w-models" value="claude-opus-4-8"></label>
        <datalist id="w-models">
@@ -245,8 +254,7 @@ function renderSetupWizard(): string {
        <div class="actions"><button onclick="go(2)">下一步 →</button></div>
      </div>
 
-     <div id="step2" style="display:none">
-       <h2>第 2 步（共 2 步）· GitHub 设置</h2>
+     <div class="panel" id="step2" style="display:none">
        <label class="field">GitHub Token（需要对所监控仓库的写权限：细粒度 PAT 勾 Issues / Pull requests 的 Read and write，或经典 PAT 勾 <code>repo</code>）
          <input id="w-github" type="password" autocomplete="off"></label>
        <div class="actions">
@@ -255,11 +263,15 @@ function renderSetupWizard(): string {
          <span id="w-msg" class="meta"></span>
        </div>
      </div>
+     </div>
 
      <script>
      function go(n){
        document.getElementById('step1').style.display = n===1 ? '' : 'none';
        document.getElementById('step2').style.display = n===2 ? '' : 'none';
+       document.getElementById('ind1').className = 'step ' + (n===1 ? 'on' : 'done');
+       document.getElementById('ind2').className = 'step ' + (n===2 ? 'on' : '');
+       document.getElementById('ind1').querySelector('.dot').textContent = n===2 ? '✓' : '1';
      }
      async function finish(){
        var msg=document.getElementById('w-msg');
@@ -355,17 +367,19 @@ function renderSettingsPage(store: Store, engine: TriageEngine): string {
 
   return page(
     "设置",
-    `<h1>⚙️ 设置</h1>
-     <p class="meta"><a href="/inbox">← Inbox</a> · 引擎状态: ${engine.configured ? "🟢 运行中" : "⚪️ 未配置（保存后自动启动）"}</p>
+    `<h1>设置</h1>
+     <p class="meta">引擎状态：${engine.configured ? "🟢 运行中" : "⚪️ 未配置（保存后自动启动）"}</p>
 
-     <h2>认证</h2>
-     <label class="field">GitHub Token（需要对所watch仓库的写权限）
-       <input id="s-github" type="password" autocomplete="off" value="${v(raw.github_token, "")}"></label>
-     <label class="field">Claude Token（可选。留空 = 使用本机 Claude Code 登录态；sk-ant-… 视为 API Key，其余视为订阅 OAuth token）
-       <input id="s-claude" type="password" autocomplete="off" value="${v(raw.claude_token, "")}"></label>
+     <h2>🔐 认证</h2>
+     <div class="panel">
+       <label class="field">GitHub Token（需要对所监控仓库的写权限）
+         <input id="s-github" type="password" autocomplete="off" value="${v(raw.github_token, "")}"></label>
+       <label class="field">Claude Token（可选。留空 = 使用本机 Claude Code 登录态；sk-ant-… 视为 API Key，其余视为订阅 OAuth token）
+         <input id="s-claude" type="password" autocomplete="off" value="${v(raw.claude_token, "")}"></label>
+     </div>
 
-     <h2>判定与轮询</h2>
-     <div class="grid">
+     <h2>🧠 判定与轮询</h2>
+     <div class="panel grid">
        <label class="field">判定模型
          <input id="s-model" type="text" value="${v(raw.model, "claude-opus-4-8")}"></label>
        <label class="field">轮询间隔（分钟）
@@ -378,10 +392,12 @@ function renderSettingsPage(store: Store, engine: TriageEngine): string {
          <input id="s-port" type="number" min="0" value="${v(raw.http?.port, "0")}"></label>
      </div>
 
-     <h2>仓库</h2>
-     <div id="repos">${repos.map(repoRow).join("")}</div>
-     <button type="button" class="ghost" onclick="addRepo()">＋ 添加仓库</button>
-     <template id="repo-tpl">${repoRow({})}</template>
+     <h2>📦 仓库</h2>
+     <div class="panel">
+       <div id="repos">${repos.map(repoRow).join("")}</div>
+       <button type="button" class="ghost" onclick="addRepo()">＋ 添加仓库</button>
+       <template id="repo-tpl">${repoRow({})}</template>
+     </div>
 
      <div class="actions" style="margin-top:1.5rem">
        <button onclick="save()">💾 保存并应用</button>
@@ -429,6 +445,7 @@ function renderSettingsPage(store: Store, engine: TriageEngine): string {
        }catch(e){ msg.textContent='❌ '+e; }
      }
      </script>`,
+    { nav: "settings" },
   );
 }
 
@@ -466,7 +483,6 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 
 function renderInboxCard(p: PendingDecision): string {
   const d = p.decision;
-  const typeLabel = p.itemType === "pull_request" ? "PR" : "Issue";
   const conf = Math.round(d.confidence * 100);
   const tok = `<input type="hidden" name="token" value="${esc(p.token)}">`;
   const ignoreForm = `<form method="post" action="/card/${p.id}/ignore" class="inline">${tok}<button class="ghost">🚫 忽略</button></form>`;
@@ -500,11 +516,15 @@ function renderInboxCard(p: PendingDecision): string {
       <div class="actions">${act}${ignoreForm}</div>`;
   }
 
+  const tag =
+    p.itemType === "pull_request"
+      ? `<span class="tag tag-pr">PR</span>`
+      : `<span class="tag tag-issue">Issue</span>`;
   return `<div class="card">
-    <div class="cardhead"><b>${esc(p.owner)}/${esc(p.repo)}</b> · ${typeLabel} <b>#${p.number}</b>
-      · <a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">在 GitHub 打开</a></div>
+    <div class="cardhead">${tag}<b>${esc(p.owner)}/${esc(p.repo)}</b><span>#${p.number}</span>
+      <a class="ext" href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">在 GitHub 打开 ↗</a></div>
     <div class="title">${esc(clip(p.title, 200))}</div>
-    <div class="reasoning">🧠 ${esc(clip(d.reasoning, 600))} <span class="meta">(置信度 ${conf}%)</span></div>
+    <div class="reasoning">🧠 ${esc(clip(d.reasoning, 600))} <span class="meta">（置信度 ${conf}%）</span></div>
     ${body}
   </div>`;
 }
@@ -564,12 +584,13 @@ function serveReply(store: Store, id: string, res: ServerResponse): void {
     200,
     page(
       `${p.owner}/${p.repo} #${p.number}`,
-      `<h1>${esc(p.owner)}/${esc(p.repo)} · ${typeLabel} #${p.number}</h1>
-       <p class="meta"><a href="/inbox">← Inbox</a> · <a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">在 GitHub 打开</a> · 状态: ${esc(p.status)}</p>
+      `<h1><span class="tag ${p.itemType === "pull_request" ? "tag-pr" : "tag-issue"}">${typeLabel}</span> ${esc(p.owner)}/${esc(p.repo)} #${p.number}</h1>
+       <p class="meta"><a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">在 GitHub 打开 ↗</a> · <span class="chip st-${esc(p.status)}">${esc(STATUS_LABEL[p.status] ?? p.status)}</span></p>
        <h2>判断依据</h2><p>${esc(p.decision.reasoning)}</p>
        ${LANG_TABS}
        <div class="lang-zh"><h2>草稿回复（中文，仅供理解）</h2><pre>${esc(zh)}</pre></div>
        <div class="lang-en"><h2>Draft reply (English — this is what gets posted)</h2><pre>${esc(en)}</pre></div>`,
+      { nav: "inbox" },
     ),
   );
 }
@@ -653,11 +674,13 @@ function renderReviewPage(p: PendingDecision): string {
 
   return page(
     `Review ${p.owner}/${p.repo} #${p.number}`,
-    `<h1>🔎 ${esc(p.owner)}/${esc(p.repo)} · PR #${p.number}</h1>
-     <p class="meta"><a href="/inbox">← Inbox</a> · <a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">在 GitHub 打开</a> · 状态: ${esc(p.status)}</p>
-     <h2>判断依据（置信度 ${Math.round(d.confidence * 100)}%）</h2><p>${esc(d.reasoning)}</p>
+    `<h1><span class="tag tag-pr">PR</span> ${esc(p.owner)}/${esc(p.repo)} #${p.number}</h1>
+     <p class="meta"><a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">在 GitHub 打开 ↗</a> · <span class="chip st-${esc(p.status)}">${esc(STATUS_LABEL[p.status] ?? p.status)}</span></p>
+     <h2>🧠 判断依据（置信度 ${Math.round(d.confidence * 100)}%）</h2>
+     <div class="panel">${esc(d.reasoning)}</div>
      ${inner}
      ${diffSection}`,
+    { nav: "inbox", wide: true },
   );
 }
 
@@ -840,75 +863,196 @@ const LANG_TABS = `<div class="tabs"><button data-l="zh" class="active" onclick=
 function page(
   title: string,
   inner: string,
-  opts?: { refreshSeconds?: number },
+  opts?: {
+    refreshSeconds?: number;
+    /** which appbar tab is active; omit for chromeless pages (wizard, errors) */
+    nav?: "inbox" | "settings";
+    /** open-card count shown next to the Inbox tab */
+    badge?: number;
+    /** wider content column (the review page's diffs) */
+    wide?: boolean;
+  },
 ): string {
+  const appbar = opts?.nav
+    ? `<header class="appbar"><div class="bar${opts.wide ? " wide" : ""}">
+        <span class="brand">🤖 GH Triage</span>
+        <nav>
+          <a href="/inbox"${opts.nav === "inbox" ? ' class="active"' : ""}>📥 Inbox${opts.badge ? ` <span class="navbadge">${opts.badge}</span>` : ""}</a>
+          <a href="/settings"${opts.nav === "settings" ? ' class="active"' : ""}>⚙️ 设置</a>
+        </nav>
+      </div></header>`
+    : "";
   return `<!doctype html><html lang="zh" data-lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeconds}">` : ""}
 <title>${esc(title)}</title>
 <style>
-  body{font:16px/1.6 -apple-system,system-ui,sans-serif;max-width:820px;margin:2rem auto;padding:0 1rem;color:#1a1a1a}
-  h1{font-size:1.25rem} h2{font-size:1rem;color:#555;margin-top:1.5rem}
-  .meta{color:#666;font-size:.9rem}
-  .tabs{display:flex;gap:.5rem;margin:1rem 0}
-  .tabs button{font-size:.9rem;margin:0;padding:.3rem .9rem;border:1px solid #d0d7de;border-radius:6px;background:#f6f8fa;color:inherit;cursor:pointer}
-  .tabs button.active{background:#0969da;border-color:#0969da;color:#fff}
+  *,*::before,*::after{box-sizing:border-box}
+  :root{
+    --bg:#f2f4f8;--surface:#fff;--surface2:#f5f7fa;--border:#e3e7ee;--border2:#edf0f5;
+    --text:#141a22;--muted:#5f6b7a;--faint:#98a2b3;
+    --accent:#2f6bff;--accent-bg:#ebf1ff;--ok:#1a7f37;--ok-bg:#e6f6ea;--danger:#c93a3a;
+    --shadow:0 1px 2px rgba(20,30,50,.06),0 2px 6px rgba(20,30,50,.05);
+    --shadow-lg:0 6px 20px rgba(20,30,50,.12);--r:12px;
+  }
+  @media(prefers-color-scheme:dark){:root{
+    --bg:#0c0f14;--surface:#151a21;--surface2:#1b212b;--border:#2a3240;--border2:#222936;
+    --text:#e4e9f0;--muted:#94a0b2;--faint:#6a7787;
+    --accent:#5f8dff;--accent-bg:#1a2540;--ok:#41c463;--ok-bg:#15281c;--danger:#ee7b7b;
+    --shadow:0 1px 2px rgba(0,0,0,.5);--shadow-lg:0 8px 24px rgba(0,0,0,.55);
+  }}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:15px/1.65 -apple-system,"SF Pro Text",system-ui,"PingFang SC","Microsoft YaHei",sans-serif}
+  main{max-width:840px;margin:0 auto;padding:1.5rem 1.5rem 4rem}
+  main.wide{max-width:1120px}
+  a{color:var(--accent)}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  /* app bar */
+  .appbar{position:sticky;top:0;z-index:10;border-bottom:1px solid var(--border);
+    background:color-mix(in srgb,var(--surface) 85%,transparent);
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+  .bar{max-width:840px;margin:0 auto;padding:.55rem 1.5rem;display:flex;align-items:center;gap:1rem}
+  .bar.wide{max-width:1120px}
+  .brand{font-weight:700;font-size:.95rem;letter-spacing:.01em}
+  nav{display:flex;gap:.3rem;margin-left:auto}
+  nav a{display:inline-flex;align-items:center;gap:.35rem;padding:.32rem .85rem;border-radius:8px;
+    color:var(--muted);text-decoration:none;font-size:.9rem;font-weight:500}
+  nav a:hover{background:var(--surface2);color:var(--text)}
+  nav a.active{background:var(--accent-bg);color:var(--accent);font-weight:600}
+  .navbadge{background:var(--accent);color:#fff;font-size:.7rem;font-weight:700;
+    border-radius:99px;padding:.05rem .45rem;line-height:1.4}
+
+  /* type & headings */
+  h1{font-size:1.3rem;font-weight:700;letter-spacing:-.01em;margin:.5rem 0 1rem}
+  h2{font-size:.78rem;font-weight:700;color:var(--muted);text-transform:uppercase;
+    letter-spacing:.07em;margin:2rem 0 .7rem}
+  .meta{color:var(--muted);font-size:.88rem}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85em;
+    background:var(--surface2);border:1px solid var(--border2);padding:.08rem .35rem;border-radius:5px}
+  pre{white-space:pre-wrap;word-wrap:break-word;background:var(--surface2);
+    border:1px solid var(--border);border-radius:8px;padding:.8rem 1rem;font-size:.88rem}
+
+  /* surfaces */
+  .panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
+    padding:1rem 1.25rem;box-shadow:var(--shadow)}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
+    padding:1rem 1.25rem;margin:1rem 0;box-shadow:var(--shadow);transition:box-shadow .15s,transform .15s}
+  .card:hover{box-shadow:var(--shadow-lg)}
+  .cardhead{display:flex;align-items:center;gap:.5rem;font-size:.85rem;color:var(--muted);flex-wrap:wrap}
+  .card .title{font-weight:650;font-size:1.02rem;margin:.35rem 0;line-height:1.45}
+  .reasoning{background:var(--surface2);border-left:3px solid var(--accent);
+    border-radius:0 8px 8px 0;padding:.55rem .8rem;margin:.65rem 0;font-size:.92rem}
+  a.ext{margin-left:auto;font-size:.82rem;text-decoration:none;white-space:nowrap}
+  a.ext:hover{text-decoration:underline}
+  .empty{background:var(--surface);border:1px dashed var(--border);border-radius:var(--r);
+    padding:2.4rem 1rem;text-align:center;color:var(--muted)}
+  .empty .big{display:block;font-size:2.1rem;margin-bottom:.5rem}
+
+  /* badges & chips */
+  .tag{font-size:.72rem;font-weight:700;padding:.12rem .55rem;border-radius:99px;letter-spacing:.02em}
+  .tag-pr{background:#efe7fd;color:#7d3fd6} .tag-issue{background:var(--ok-bg);color:var(--ok)}
+  .count{font-size:.85rem;background:var(--accent);color:#fff;border-radius:99px;
+    padding:.1rem .55rem;vertical-align:2px;margin-left:.2rem}
+  .chip{font-size:.75rem;font-weight:600;padding:.08rem .55rem;border-radius:99px;
+    background:var(--surface2);color:var(--muted);white-space:nowrap}
+  .chip.st-replied,.chip.st-executed{background:var(--ok-bg);color:var(--ok)}
+  .chip.st-superseded{background:#fdf3d0;color:#8a6a00}
+  .sev{font-size:.72rem;font-weight:700;padding:.1rem .5rem;border-radius:99px;margin:0 .35rem}
+  .sev-blocker{background:#fde3e3;color:#c02626} .sev-suggestion{background:#dcebff;color:#1d63d8}
+  .sev-nit{background:var(--surface2);color:var(--muted)} .sev-question{background:#fdf3d0;color:#8a6a00}
+  .warn{color:var(--danger);font-size:.8rem}
+
+  /* buttons */
+  button,a.btn{font:inherit;font-size:.88rem;font-weight:600;padding:.45rem 1.05rem;border:0;
+    border-radius:8px;background:var(--accent);color:#fff;cursor:pointer;text-decoration:none;
+    display:inline-flex;align-items:center;gap:.35rem;transition:filter .12s}
+  button:hover,a.btn:hover{filter:brightness(1.09)}
+  button.ghost{background:transparent;color:var(--muted);border:1px solid var(--border)}
+  button.ghost:hover{background:var(--surface2);color:var(--text);filter:none}
+  .actions{display:flex;gap:.6rem;align-items:center;margin-top:.8rem;flex-wrap:wrap}
+  form.inline{display:inline;margin:0}
+
+  /* forms */
+  input[type=text],input[type=password],input[type=number],textarea{width:100%;font:inherit;
+    padding:.5rem .7rem;border:1px solid var(--border);border-radius:8px;
+    background:var(--surface);color:inherit;transition:border-color .12s,box-shadow .12s}
+  input:focus,textarea:focus{outline:none;border-color:var(--accent);
+    box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 18%,transparent)}
+  input[type=checkbox]{width:auto;accent-color:var(--accent)}
+  textarea{background:var(--surface2)}
+  label.field{display:block;margin:.85rem 0;font-size:.85rem;font-weight:550;color:var(--muted)}
+  label.field input{margin-top:.35rem;font-weight:400}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:0 1.25rem}
+  @media(max-width:640px){.grid{grid-template-columns:1fr}}
+
+  /* repo rows (settings + inbox) */
+  .repo{display:flex;gap:.5rem;align-items:center;margin:.5rem 0;flex-wrap:wrap}
+  .repo input[type=text]{width:auto}
+  .repo .r-url{flex:2;min-width:14rem} .repo .r-ignore{flex:1;min-width:8rem}
+  .repo label{font-size:.85rem;color:var(--muted);white-space:nowrap}
+  .addrepo{display:flex;gap:.6rem;align-items:center;margin:.7rem 0 .2rem}
+  .addrepo input{flex:1;width:auto;min-width:10rem}
+  .addrepo button{white-space:nowrap}
+
+  /* lists */
+  ul.histlist{list-style:none;padding:0;margin:0}
+  li.hist{display:flex;align-items:center;gap:.55rem;padding:.5rem .1rem;font-size:.88rem;
+    border-bottom:1px solid var(--border2);flex-wrap:wrap}
+  li.hist:last-child{border-bottom:0}
+  li.hist form.inline{margin-left:auto}
+  li.hist form.inline button{font-size:.78rem;padding:.12rem .55rem}
+
+  /* language tabs */
+  .tabs{display:inline-flex;background:var(--surface2);border:1px solid var(--border);
+    border-radius:9px;padding:2px;gap:2px;margin:1rem 0}
+  .tabs button{background:transparent;color:var(--muted);border-radius:7px;
+    padding:.22rem .95rem;font-size:.84rem;box-shadow:none}
+  .tabs button:hover{filter:none;color:var(--text)}
+  .tabs button.active{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
   [data-lang="zh"] .lang-en{display:none}
   [data-lang="en"] .lang-zh{display:none}
-  pre{white-space:pre-wrap;word-wrap:break-word;background:#f6f8fa;border:1px solid #e1e4e8;border-radius:6px;padding:1rem}
-  a{color:#0969da}
-  ul.pts{list-style:none;padding:0} li.pt{border:1px solid #e1e4e8;border-radius:8px;padding:.75rem 1rem;margin:.75rem 0}
-  li.pt label{cursor:pointer} .cmt{margin:.4rem 0} .ev{color:#666;font-size:.9rem}
-  .en{margin:.3rem 0;font-size:.9rem;color:#444;border-left:3px solid #d0d7de;padding-left:.5rem}
-  .sev{font-size:.75rem;font-weight:600;padding:.05rem .4rem;border-radius:4px;margin:0 .3rem}
-  .sev-blocker{background:#ffdce0;color:#b31d28} .sev-suggestion{background:#ddf4ff;color:#0969da}
-  .sev-nit{background:#eef;color:#555} .sev-question{background:#fff5b1;color:#7a5b00}
-  .warn{color:#b31d28;font-size:.8rem}
-  pre.code{font-size:.85rem;padding:.5rem} pre.code .hl{background:#fff8c5}
-  details{border:1px solid #e1e4e8;border-radius:6px;margin:.5rem 0} details>summary{cursor:pointer;padding:.5rem .8rem;font-family:ui-monospace,monospace;font-size:.85rem;background:#f6f8fa}
-  details pre.code{margin:0;border:0;border-top:1px solid #e1e4e8;border-radius:0;max-height:70vh;overflow:auto}
-  .da{background:#e6ffec} .dd{background:#ffebe9} .dh{color:#8250df}
-  button{font-size:1rem;padding:.5rem 1rem;border:0;border-radius:6px;background:#1f883d;color:#fff;cursor:pointer;margin-top:1rem}
-  code{background:#eff1f3;padding:.05rem .3rem;border-radius:4px}
-  textarea{width:100%;box-sizing:border-box;font:inherit;padding:.6rem;border:1px solid #e1e4e8;border-radius:6px;background:#f6f8fa;color:inherit}
-  .card{border:1px solid #d0d7de;border-radius:10px;padding:1rem;margin:1rem 0}
-  .cardhead{font-size:.9rem;color:#57606a} .card .title{font-weight:600;margin:.3rem 0}
-  .reasoning{margin:.4rem 0}
-  .count{font-size:.9rem;background:#0969da;color:#fff;border-radius:10px;padding:.1rem .5rem;vertical-align:middle}
-  .actions{display:flex;gap:.5rem;align-items:center;margin-top:.5rem} form.inline{display:inline;margin:0}
-  .actions button,a.btn{font-size:.9rem;padding:.4rem .9rem;margin:0;border:0;border-radius:6px;background:#1f883d;color:#fff;cursor:pointer;text-decoration:none;display:inline-block}
-  button.ghost{background:transparent;color:#57606a;border:1px solid #d0d7de}
-  .chip{font-size:.75rem;font-weight:600;padding:.05rem .5rem;border-radius:10px;background:#eef;color:#555;margin-right:.4rem}
-  .chip.st-replied,.chip.st-executed{background:#dafbe1;color:#1a7f37}
-  .chip.st-ignored{background:#eee;color:#666} .chip.st-superseded{background:#fff5b1;color:#7a5b00}
-  ul.histlist{list-style:none;padding:0} li.hist{padding:.25rem 0;font-size:.9rem}
-  a.gear{float:right;text-decoration:none;font-size:1.1rem}
-  label.field{display:block;margin:.6rem 0;font-size:.9rem;color:#57606a}
-  label.field input{display:block;width:100%;box-sizing:border-box;margin-top:.25rem;font:inherit;padding:.45rem .6rem;border:1px solid #d0d7de;border-radius:6px;background:#fff;color:inherit}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:0 1rem}
-  .repo{display:flex;gap:.5rem;align-items:center;margin:.4rem 0;flex-wrap:wrap}
-  .repo input[type=text]{font:inherit;padding:.4rem .6rem;border:1px solid #d0d7de;border-radius:6px;background:#fff;color:inherit}
-  .repo .r-url{flex:2;min-width:16rem} .repo .r-ignore{flex:1;min-width:8rem}
-  .repo label{font-size:.85rem;color:#57606a;white-space:nowrap}
-  .addrepo{display:flex;gap:.5rem;align-items:center;margin:.6rem 0}
-  .addrepo input{flex:1;min-width:12rem;font:inherit;padding:.45rem .6rem;border:1px solid #d0d7de;border-radius:6px;background:#fff;color:inherit}
-  .addrepo button{margin:0;font-size:.9rem;padding:.45rem .9rem}
-  li.hist form.inline button{margin:0;font-size:.8rem;padding:.1rem .5rem}
+  .en{margin:.3rem 0;font-size:.9rem;color:var(--muted);border-left:3px solid var(--border);padding-left:.6rem}
+
+  /* review points & diffs */
+  ul.pts{list-style:none;padding:0}
+  li.pt{background:var(--surface);border:1px solid var(--border);border-radius:10px;
+    padding:.8rem 1rem;margin:.7rem 0;box-shadow:var(--shadow)}
+  li.pt label{cursor:pointer} .cmt{margin:.4rem 0} .ev{color:var(--muted);font-size:.88rem}
+  pre.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.82rem;padding:.5rem;line-height:1.5}
+  pre.code .hl{background:#fff3bf}
+  details{background:var(--surface);border:1px solid var(--border);border-radius:10px;margin:.6rem 0;box-shadow:var(--shadow)}
+  details>summary{cursor:pointer;padding:.55rem .9rem;font-family:ui-monospace,Menlo,monospace;
+    font-size:.84rem;color:var(--muted);border-radius:10px}
+  details[open]>summary{border-bottom:1px solid var(--border);color:var(--text)}
+  details>summary:hover{color:var(--text)}
+  details pre.code{margin:0;border:0;border-radius:0 0 10px 10px;max-height:70vh;overflow:auto;background:var(--surface)}
+  .da{background:#e9f8ee} .dd{background:#fdecec} .dh{color:#8250df;padding:.15rem 0}
+
+  /* setup wizard */
+  .wizard{max-width:560px;margin:2.5rem auto 0}
+  .wizard h1{margin:.4rem 0 .3rem}
+  .whead{text-align:center;margin-bottom:1.6rem}
+  .whead .logo{font-size:2.4rem;display:block}
+  .steps{display:flex;align-items:center;gap:.7rem;margin:1.4rem 0;font-size:.86rem;font-weight:600}
+  .step{display:inline-flex;align-items:center;gap:.5rem;color:var(--faint)}
+  .step .dot{width:1.55rem;height:1.55rem;border-radius:50%;display:inline-flex;align-items:center;
+    justify-content:center;background:var(--surface2);border:1px solid var(--border);font-size:.78rem}
+  .step.on{color:var(--text)}
+  .step.on .dot{background:var(--accent);border-color:var(--accent);color:#fff}
+  .step.done{color:var(--ok)}
+  .step.done .dot{background:var(--ok-bg);border-color:transparent;color:var(--ok)}
+  .steps .line{flex:1;height:1px;background:var(--border)}
+  .wizard .panel{padding:1.25rem 1.5rem}
+
   @media(prefers-color-scheme:dark){
-    body{background:#0d1117;color:#c9d1d9} pre,li.pt,textarea{background:#161b22;border-color:#30363d}
-    h2,.meta,.ev{color:#8b949e} .en{color:#adbac7;border-color:#30363d} a{color:#58a6ff} code{background:#161b22}
-    .card{border-color:#30363d} .cardhead{color:#8b949e}
-    button.ghost{border-color:#30363d;color:#8b949e}
-    .chip{background:#161b22;color:#8b949e} .chip.st-replied,.chip.st-executed{background:#12261e;color:#3fb950}
-    .chip.st-ignored{background:#161b22;color:#666} .chip.st-superseded{background:#3f2e00;color:#d29922}
-    label.field{color:#8b949e} label.field input,.repo input[type=text],.addrepo input{background:#161b22;border-color:#30363d}
-    .repo label{color:#8b949e}
+    .tag-pr{background:#2c2150;color:#c4a5ff}
+    .chip.st-superseded,.sev-question{background:#3a2e08;color:#e3b341}
+    .sev-blocker{background:#3a1a18;color:#f47067} .sev-suggestion{background:#182236;color:#79a8ff}
     pre.code .hl{background:#3f2e00}
-    .tabs button{background:#161b22;border-color:#30363d} .tabs button.active{background:#1f6feb;border-color:#1f6feb;color:#fff}
-    details,details>summary{border-color:#30363d} details>summary{background:#161b22} details pre.code{border-color:#30363d}
-    .da{background:#12261e} .dd{background:#25171c} .dh{color:#a371f7}
+    .da{background:#12261e} .dd{background:#2b1719} .dh{color:#a371f7}
   }
-</style></head><body>${inner}
+</style></head><body>${appbar}<main${opts?.wide ? ' class="wide"' : ""}>${inner}</main>
 <script>
 function setLang(l){document.documentElement.dataset.lang=l;
   for(var b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.l===l);}
