@@ -18,9 +18,9 @@ export const ReviewPointSchema = z.object({
   path: z.string(),
   line: z.number().int().positive().nullable(),
   severity: SeverityEnum.default("suggestion"),
-  /** post-language text — this is what gets posted inline on GitHub */
+  /** English version of the point (which variant gets posted is a settings choice) */
   comment: z.string(),
-  /** display-language rendering for the human; NOT posted (field name is legacy) */
+  /** 中文 version of the point (optional in the type for legacy rows; required at judge time) */
   commentZh: z.string().optional(),
   /** what in the diff this is based on (quote/snippet) */
   evidence: z.string().optional(),
@@ -31,10 +31,10 @@ export const DecisionSchema = z
   .object({
     itemType: z.enum(["issue", "pull_request"]),
     needsReply: z.boolean(),
-    /** post-language text — the reply actually POSTED to GitHub when needsReply=true.
-     *  For a PR this is the review's top-level body; per-line points go in reviewPoints. */
+    /** English version of the reply (for a PR, the review's top-level body). Which
+     *  variant gets posted is decided at confirm time by the post_language setting. */
     draftReply: z.string().optional(),
-    /** display-language rendering of draftReply for the human; NOT posted (legacy name) */
+    /** 中文 version of the same reply (optional in the type for legacy rows) */
     draftReplyZh: z.string().optional(),
     /** PR only: per-line review points, each anchored to a changed line */
     reviewPoints: z.array(ReviewPointSchema).default([]),
@@ -42,8 +42,10 @@ export const DecisionSchema = z
     suggestedAction: ActionEnum.default("none"),
     /** Labels to apply when suggestedAction=add_labels */
     labels: z.array(z.string()).default([]),
-    /** Human-readable rationale for the decision */
+    /** Human-readable rationale, 中文 */
     reasoning: z.string(),
+    /** The same rationale in English (optional in the type for legacy rows) */
+    reasoningEn: z.string().optional(),
     /** Confidence, 0-1 */
     confidence: z.number().min(0).max(1),
   })
@@ -55,6 +57,29 @@ export const DecisionSchema = z
         message: "draftReply is required when needsReply=true",
       });
     }
+    if (d.needsReply && !d.draftReplyZh?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["draftReplyZh"],
+        message: "draftReplyZh (中文 version) is required when needsReply=true",
+      });
+    }
+    if (!d.reasoningEn?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["reasoningEn"],
+        message: "reasoningEn (English rationale) is required",
+      });
+    }
+    d.reviewPoints.forEach((pt, i) => {
+      if (!pt.commentZh?.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["reviewPoints", i, "commentZh"],
+          message: "commentZh (中文 version) is required for every review point",
+        });
+      }
+    });
     if (d.suggestedAction === "add_labels" && d.labels.length === 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -76,7 +101,7 @@ export type Decision = z.infer<typeof DecisionSchema>;
 export const DecisionJsonSchema: Record<string, unknown> = {
   type: "object",
   additionalProperties: false,
-  required: ["itemType", "needsReply", "reasoning", "confidence"],
+  required: ["itemType", "needsReply", "reasoning", "reasoningEn", "confidence"],
   properties: {
     itemType: { type: "string", enum: ["issue", "pull_request"] },
     needsReply: { type: "boolean" },
@@ -87,7 +112,7 @@ export const DecisionJsonSchema: Record<string, unknown> = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["path", "line", "comment"],
+        required: ["path", "line", "comment", "commentZh"],
         properties: {
           path: { type: "string" },
           line: { type: ["integer", "null"] },
@@ -104,6 +129,7 @@ export const DecisionJsonSchema: Record<string, unknown> = {
     suggestedAction: { type: "string", enum: ActionEnum.options },
     labels: { type: "array", items: { type: "string" } },
     reasoning: { type: "string" },
+    reasoningEn: { type: "string" },
     confidence: { type: "number", minimum: 0, maximum: 1 },
   },
 };

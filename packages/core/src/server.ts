@@ -125,6 +125,19 @@ function previewLabel(): string {
     ? `Preview (${LANGS.display} — for your reference, never posted)`
     : `预览（${LANGS.display}，仅供理解，不会发布）`;
 }
+const isZhName = (name: string): boolean => name.trim() === "中文";
+function pickPair(primary?: string | null, fallback?: string | null): string {
+  return primary?.trim() ? primary : fallback?.trim() ? fallback : "";
+}
+/** The display-language variant of a stored zh/en text pair (falls back to the other). */
+function displayText(zh?: string | null, en?: string | null): string {
+  return isZhName(LANGS.display) ? pickPair(zh, en) : pickPair(en, zh);
+}
+/** The posting-language variant of a stored zh/en text pair (falls back to the other). */
+function postText(zh?: string | null, en?: string | null): string {
+  return isZhName(LANGS.post) ? pickPair(zh, en) : pickPair(en, zh);
+}
+
 /** Qualifier line above the post-language (outgoing) block. */
 function outgoingLabel(editable = false): string {
   return UI === "en"
@@ -689,15 +702,15 @@ function renderInboxCard(p: PendingDecision): string {
     body = `<p>${icon("search", 14)} ${countLine}</p>
       <div class="actions"><a class="btn" href="${url}">${icon("search", 14)} ${t("逐条审核并提交")}</a>${ignoreForm}</div>`;
   } else if (d.needsReply) {
-    const en = d.draftReply ?? "";
-    const zh = d.draftReplyZh?.trim() || en; // old cards may lack the Chinese draft
+    const preview = displayText(d.draftReplyZh, d.draftReply);
+    const outgoing = postText(d.draftReplyZh, d.draftReply);
     body = `<details><summary>${icon("msg", 14)} ${t("草稿回复（点开审阅/编辑）")}</summary>
       <div class="draft">
         ${langTabs()}
-        <div class="lang-zh"><p class="meta">${previewLabel()}</p><pre>${esc(zh)}</pre></div>
+        <div class="lang-zh"><p class="meta">${previewLabel()}</p><pre>${esc(preview)}</pre></div>
         <form method="post" action="/card/${p.id}/reply">${tok}
           <div class="lang-en"><p class="meta">${outgoingLabel(true)}</p>
-            <textarea name="body" rows="6">${esc(en)}</textarea></div>
+            <textarea name="body" rows="6">${esc(outgoing)}</textarea></div>
           <div class="actions"><button>${icon("check", 14)} ${t("批准并回复")}</button></div>
         </form>
       </div></details>
@@ -724,7 +737,7 @@ function renderInboxCard(p: PendingDecision): string {
     <div class="cardhead">${tag}<b>${esc(p.owner)}/${esc(p.repo)}</b><span>#${p.number}</span>
       <a class="ext" href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">${t("在 GitHub 打开")} ${icon("ext", 12)}</a></div>
     <div class="title">${esc(clip(p.title, 200))}</div>
-    <div class="reasoning">${icon("spark", 14)} ${esc(clip(d.reasoning, 600))} <span class="meta">${confLabel(conf)}</span></div>
+    <div class="reasoning">${icon("spark", 14)} ${esc(clip(displayText(d.reasoning, d.reasoningEn), 600))} <span class="meta">${confLabel(conf)}</span></div>
     ${body}
   </div>`;
 }
@@ -777,8 +790,8 @@ function serveReply(store: Store, id: string, res: ServerResponse): void {
   const p = store.getPending(id);
   if (!p) return send(res, 404, page(t("未找到"), `<p>${t("该草稿不存在或已过期。")}</p>`));
   const typeLabel = p.itemType === "pull_request" ? "PR" : "Issue";
-  const en = p.decision.draftReply?.trim() || "(no draft)";
-  const zh = p.decision.draftReplyZh?.trim() || en; // fallback to EN on old cards
+  const en = postText(p.decision.draftReplyZh, p.decision.draftReply) || "(no draft)";
+  const zh = displayText(p.decision.draftReplyZh, p.decision.draftReply) || en;
   send(
     res,
     200,
@@ -786,7 +799,7 @@ function serveReply(store: Store, id: string, res: ServerResponse): void {
       `${p.owner}/${p.repo} #${p.number}`,
       `<h1><span class="tag ${p.itemType === "pull_request" ? "tag-pr" : "tag-issue"}">${typeLabel}</span> ${esc(p.owner)}/${esc(p.repo)} #${p.number}</h1>
        <p class="meta"><a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">${t("在 GitHub 打开")} ${icon("ext", 12)}</a> · <span class="chip st-${esc(p.status)}">${esc(t(STATUS_LABEL[p.status] ?? p.status))}</span></p>
-       <h2>${t("判断依据")}</h2><p>${esc(p.decision.reasoning)}</p>
+       <h2>${t("判断依据")}</h2><p>${esc(displayText(p.decision.reasoning, p.decision.reasoningEn))}</p>
        ${langTabs()}
        <div class="lang-zh"><h2>${previewLabel()}</h2><pre>${esc(zh)}</pre></div>
        <div class="lang-en"><h2>${outgoingLabel()}</h2><pre>${esc(en)}</pre></div>`,
@@ -812,8 +825,8 @@ function renderReviewPage(p: PendingDecision, side: string): string {
     }
     return s;
   };
-  const overallEn = d.draftReply?.trim() || "";
-  const overallZh = d.draftReplyZh?.trim() || "";
+  const overallEn = postText(d.draftReplyZh, d.draftReply);
+  const overallZh = displayText(d.draftReplyZh, d.draftReply);
   const done = p.status !== "pending" && p.status !== "awaiting_edit";
 
   const items = d.reviewPoints
@@ -827,8 +840,8 @@ function renderReviewPage(p: PendingDecision, side: string): string {
         <label><input type="checkbox" name="pt" value="${i}" checked ${done ? "disabled" : ""}>
           <span class="sev sev-${esc(pt.severity)}">${esc(pt.severity)}</span>
           <code>${loc}</code>${warn}</label>
-        <div class="cmt lang-zh">${esc(pt.commentZh || pt.comment)}</div>
-        <div class="en lang-en">${esc(pt.comment)}</div>
+        <div class="cmt lang-zh">${esc(displayText(pt.commentZh, pt.comment))}</div>
+        <div class="en lang-en">${esc(postText(pt.commentZh, pt.comment))}</div>
         ${pt.evidence ? `<div class="ev">${t("依据：")}${esc(pt.evidence)}</div>` : ""}
         ${code ? `<pre class="code">${code}</pre>` : ""}
       </li>`;
@@ -880,7 +893,7 @@ function renderReviewPage(p: PendingDecision, side: string): string {
     `<h1><span class="tag tag-pr">PR</span> ${esc(p.owner)}/${esc(p.repo)} #${p.number}</h1>
      <p class="meta"><a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">${t("在 GitHub 打开")} ${icon("ext", 12)}</a> · <span class="chip st-${esc(p.status)}">${esc(t(STATUS_LABEL[p.status] ?? p.status))}</span></p>
      <h2>${icon("spark", 13)} ${t("判断依据")} ${confLabel(Math.round(d.confidence * 100))}</h2>
-     <div class="panel">${esc(d.reasoning)}</div>
+     <div class="panel">${esc(displayText(d.reasoning, d.reasoningEn))}</div>
      ${inner}
      ${diffSection}`,
     { side, wide: true },
@@ -1014,17 +1027,19 @@ export function buildReviewSubmission(
   for (const i of selected) {
     const pt = d.reviewPoints[i];
     if (!pt) continue;
+    const text = postText(pt.commentZh, pt.comment);
     if (pt.line != null && commentableFor(pt.path).has(pt.line)) {
-      comments.push({ path: pt.path, line: pt.line, body: `**[${pt.severity}]** ${pt.comment}` });
+      comments.push({ path: pt.path, line: pt.line, body: `**[${pt.severity}]** ${text}` });
     } else {
       const loc = `\`${pt.path}${pt.line != null ? `:${pt.line}` : ""}\``;
-      extra.push(`- ${loc} **[${pt.severity}]** ${pt.comment}`);
+      extra.push(`- ${loc} **[${pt.severity}]** ${text}`);
     }
   }
 
-  let body = (overrideBody ?? d.draftReply ?? "").trim();
+  let body = (overrideBody ?? postText(d.draftReplyZh, d.draftReply)).trim();
   if (extra.length) {
-    body += (body ? "\n\n" : "") + "**其他意见：**\n" + extra.join("\n");
+    const header = isZhName(LANGS.post) ? "**其他意见：**" : "**Additional points:**";
+    body += (body ? "\n\n" : "") + header + "\n" + extra.join("\n");
   }
   return { body, comments };
 }

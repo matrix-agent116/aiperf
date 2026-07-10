@@ -60,14 +60,14 @@ The engine marks an item's fingerprint (`itemKey@updatedAt`) processed **only af
 
 ### Language configuration
 
-Three settings drive all language behavior (0.6.0; previously hardcoded English-posted/Chinese-displayed):
+**Every judgment stores BOTH languages; the settings only pick which variant to show/post** (0.7.0 — switching languages is instant, no re-judging). The judge always emits English + 中文 pairs: `draftReply`/`draftReplyZh`, `comment`/`commentZh`, `reasoningEn`/`reasoning` (enforced by `DecisionSchema.superRefine`; legacy rows may lack the newer fields, so render/post paths fall back to the other variant via `pickPair`).
+
+Three settings (all dropdowns on /settings):
 - `ui_language` (`zh`|`en`) — interface language; server.ts renders strings through `t()`, whose `EN` map is keyed by the Chinese source string (unlisted strings fall back to Chinese). `applyUiPrefs(store)` sets module-level `UI`/`LANGS` at the top of every request.
-- `post_language` (free-form name, default `English`) — what actually gets POSTED to GitHub: `draftReply`, review point `comment`.
-- `display_language` (free-form name, default `中文`) — human-facing judge output: `reasoning`, `draftReplyZh`, `commentZh`. The `*Zh` field names are **legacy** — they hold whatever the display language is.
+- `display_language` (`中文`|`English`) — which variant the human sees: `displayText(zh, en)` in server.ts; also the desktop notification text.
+- `post_language` (`中文`|`English`) — which variant gets POSTED: `postText(zh, en)` in server.ts (review submission incl. the "其他意见/Additional points" header) and the `approveReply` fallback in engine.ts.
 
-`buildSystemPrompt(postLang, displayLang)` in `judge/prompt.ts` threads both into the judge. Keep the posted-vs-display split for any new user-facing field, and add new UI strings to the `EN` map.
-
-Changing either content language **re-judges all open cards automatically**: `engine.setConfig` detects the change and calls `requeueOpenCards()` (clears the items' `processed` fingerprints via `store.clearProcessedForItem`, rewinds repo cursors to 24h before the earliest open card via `store.rewindCursor`); the next cycle re-fetches and re-judges them, and the fresh cards supersede the old ones through the existing supersede path. Done/archived cards keep their original languages.
+Add new UI strings to the `EN` map; any new judge-generated user-facing field must come as a zh/en pair and go through `displayText`/`postText`.
 
 ### Performance conventions
 

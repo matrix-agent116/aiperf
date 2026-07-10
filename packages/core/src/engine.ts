@@ -52,49 +52,14 @@ export class TriageEngine extends EventEmitter<EngineEvents> {
    * change takes effect immediately).
    */
   setConfig(app: AppConfig): void {
-    const prev = this.app;
     const wasRunning = this.timer !== null;
     this.stop();
     this.app = app;
     configureGithub(app.github_token);
     applyClaudeAuth(app.claude_token);
-    // Content languages changed → old open cards hold old-language text. Requeue
-    // them for re-judging; the fresh cards supersede the stale ones on the next
-    // cycle (which start()/pollNow below kicks off immediately).
-    if (
-      prev &&
-      (prev.post_language !== app.post_language ||
-        prev.display_language !== app.display_language)
-    ) {
-      const n = this.requeueOpenCards();
-      if (n) {
-        console.log(
-          `[settings] content languages changed — re-judging ${n} open card(s) in ${app.display_language}/${app.post_language}`,
-        );
-      }
-    }
     if (wasRunning) this.start();
-  }
-
-  /**
-   * Make every open card's item eligible for re-judging: clear its dedupe
-   * fingerprints and rewind the repo cursor to before the card was created
-   * (item.updatedAt always precedes the judgment, minus a 1-day safety margin).
-   */
-  private requeueOpenCards(): number {
-    const open = this.store.listOpen();
-    if (!open.length) return 0;
-    const earliestByRepo = new Map<string, number>();
-    for (const p of open) {
-      this.store.clearProcessedForItem(itemKey(p));
-      const repoKey = `${p.owner}/${p.repo}`;
-      const e = earliestByRepo.get(repoKey);
-      if (e === undefined || p.createdAt < e) earliestByRepo.set(repoKey, p.createdAt);
-    }
-    for (const [repoKey, ts] of earliestByRepo) {
-      this.store.rewindCursor(repoKey, new Date(ts - 24 * 3600_000).toISOString());
-    }
-    return open.length;
+    // Content-language switches need no re-judging: every judgment stores BOTH
+    // language variants, and rendering/posting picks one per the settings.
   }
 
   /** Run one cycle immediately, then poll on the configured interval. */
@@ -140,7 +105,13 @@ export class TriageEngine extends EventEmitter<EngineEvents> {
    */
   async approveReply(id: string, editedText?: string): Promise<FinalizedEvent> {
     const p = this.mustBeOpen(id);
-    const body = (editedText ?? p.draftReply ?? "").trim();
+    // Fallback (no edited text from the form): pick the stored variant matching
+    // the configured posting language; both were generated at judge time.
+    const stored =
+      this.app?.post_language === "中文"
+        ? (p.decision.draftReplyZh ?? p.decision.draftReply)
+        : (p.decision.draftReply ?? p.decision.draftReplyZh);
+    const body = (editedText ?? stored ?? "").trim();
     if (!body) throw new Error("回复内容为空");
     if (editedText) this.store.setPendingDraft(id, editedText);
     const url = await postReply(p, body);
@@ -207,7 +178,7 @@ export class TriageEngine extends EventEmitter<EngineEvents> {
         for (const item of items) {
           const fingerprint = `${itemKey(item)}@${item.updatedAt}`;
           try {
-            const decision = await judge(item, app);
+            const decision = await judge(item, app.model);
             const pending = this.store.createPending({
               owner: item.owner,
               repo: item.repo,

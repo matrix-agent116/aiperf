@@ -43,8 +43,13 @@ function cardSummary(p: {
   itemType: string;
   number: number;
   title: string;
-  decision: { needsReply: boolean; reasoning: string };
+  decision: { needsReply: boolean; reasoning: string; reasoningEn?: string };
 }) {
+  // Notification text follows the configured display language (both variants are stored).
+  const raw = store.getSettingsRaw() as Record<string, any> | null;
+  const wantZh = String(raw?.display_language ?? "中文").trim() === "中文";
+  const reasoning =
+    (wantZh ? p.decision.reasoning : (p.decision.reasoningEn ?? p.decision.reasoning)) ?? "";
   return {
     id: p.id,
     repo: `${p.owner}/${p.repo}`,
@@ -52,7 +57,7 @@ function cardSummary(p: {
     number: p.number,
     title: p.title.slice(0, 120),
     needsReply: p.decision.needsReply,
-    reasoning: p.decision.reasoning.slice(0, 160),
+    reasoning: reasoning.slice(0, 160),
   };
 }
 
