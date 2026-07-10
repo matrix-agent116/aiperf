@@ -43,6 +43,21 @@ function showWindow() {
   win.maximize();
   win.show();
   win.loadURL(inboxUrl());
+  // There is no Edit menu (the app menu is quit-only), so macOS won't dispatch
+  // the standard edit key equivalents to the page — wire them up by hand.
+  win.webContents.on("before-input-event", (e, input) => {
+    if (process.platform !== "darwin" || !input.meta || input.type !== "keyDown") return;
+    const wc = win.webContents;
+    switch (input.key.toLowerCase()) {
+      case "c": wc.copy(); break;
+      case "v": wc.paste(); break;
+      case "x": wc.cut(); break;
+      case "a": wc.selectAll(); break;
+      case "z": input.shift ? wc.redo() : wc.undo(); break;
+      default: return;
+    }
+    e.preventDefault();
+  });
   // Closing the window keeps the app running in the tray (menu-bar app behavior).
   win.on("close", (e) => {
     if (!quitting) {
@@ -134,12 +149,14 @@ if (!gotLock) {
   app.whenReady().then(() => {
     // Packaged builds get the icon from the bundle (build/icon.icns); this covers dev runs.
     if (app.dock && !app.isPackaged) app.dock.setIcon(path.join(rootDir, "build/icon.png"));
-    // Drop Electron's default menus. macOS must keep an app menu (quit/hide) and
-    // needs an Edit menu for ⌘C/⌘V/⌘A to reach the web UI's text fields; the
-    // menu title comes from the bundle name (Git Triage when packaged).
+    // Drop Electron's default menus. macOS must keep an app menu — quit-only here
+    // (its title comes from the bundle name; edit shortcuts are handled per-window
+    // in showWindow since there is no Edit menu to dispatch them).
     if (process.platform === "darwin") {
       Menu.setApplicationMenu(
-        Menu.buildFromTemplate([{ role: "appMenu" }, { role: "editMenu" }]),
+        Menu.buildFromTemplate([
+          { label: app.name, submenu: [{ role: "quit", label: "Quit" }] },
+        ]),
       );
     } else {
       Menu.setApplicationMenu(null);
