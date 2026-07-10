@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { gzipSync } from "node:zlib";
 import { recentLogs } from "./log.ts";
-import type { Store, PendingDecision } from "./store.ts";
+import type { Store, PendingDecision, ArchiveItem } from "./store.ts";
 import type { TriageEngine } from "./engine.ts";
 import type { SuggestedAction } from "./judge/schema.ts";
 import type { RepoAnalysis, RepoComponent, RepoFinding } from "./judge/repo-analysis.ts";
@@ -126,6 +126,23 @@ const EN: Record<string, string> = {
   "未发现明显安全问题": "No obvious security issues found",
   "更新于": "Updated",
   "引擎未配置，请先在设置页完成配置。": "The engine is not configured yet — finish setup on the settings page first.",
+  "历史": "History",
+  "已合并": "Merged",
+  "已关闭": "Closed",
+  "开放": "Open",
+  "上一页": "Prev",
+  "下一页": "Next",
+  "创建于": "Created",
+  "关闭于": "Closed",
+  "评论时间线": "Timeline",
+  "（没有评论）": "(no comments)",
+  "该条目尚未同步到本地档案": "This item is not in the local archive yet",
+  "历史会在轮询周期后自动回填，也可在仓库页手动同步": "History backfills automatically after poll cycles; you can also sync manually on the repo page",
+  "历史档案": "History archive",
+  "条已关闭的 issue/PR": "closed issues/PRs stored",
+  "同步历史": "Sync history",
+  "同步中…": "Syncing…",
+  "同步中断，将自动续跑": "Sync interrupted — will resume automatically",
   "确定要将勾选的审查意见提交到 GitHub 吗？": "Submit the selected review points to GitHub?",
   "在 GitHub 查看这次 review": "View this review on GitHub",
   "状态": "status",
@@ -168,6 +185,8 @@ const REVIEW_RE = /^\/review\/([A-Za-z0-9_-]+)\/?$/;
 const CARD_ACTION_RE = /^\/card\/([A-Za-z0-9_-]+)\/(reply|act|ignore|restore)\/?$/;
 const REPO_PAGE_RE = /^\/repo\/([^/]+)\/([^/]+)\/?$/;
 const REPO_ANALYZE_RE = /^\/repo\/([^/]+)\/([^/]+)\/analyze\/?$/;
+const REPO_SYNC_RE = /^\/repo\/([^/]+)\/([^/]+)\/sync\/?$/;
+const ITEM_RE = /^\/item\/([^/]+)\/([^/]+)\/(\d+)\/?$/;
 
 /**
  * Local HTTP service that IS the app UI (the desktop shell loads these pages).
@@ -224,7 +243,8 @@ export function startHttpServer(
         }
         const view = url.searchParams.get("view") === "done" ? "done" : "open";
         const repoFilter = url.searchParams.get("repo") ?? undefined;
-        return send(res, 200, renderInbox(store, view, repoFilter));
+        const pageNum = Math.max(1, parseInt(url.searchParams.get("p") ?? "1", 10) || 1);
+        return send(res, 200, renderInbox(store, view, repoFilter, pageNum));
       }
 
       if (req.method === "GET" && path === "/logs") {
@@ -267,12 +287,40 @@ export function startHttpServer(
         return res.end();
       }
 
+      const sync = path.match(REPO_SYNC_RE);
+      if (req.method === "POST" && sync) {
+        const owner = decodeURIComponent(sync[1]);
+        const repo = decodeURIComponent(sync[2]);
+        if (!engine.configured) {
+          return send(res, 409, page(t("出错了"), `<p>${t("引擎未配置，请先在设置页完成配置。")}</p>`));
+        }
+        engine.runArchiveSync(owner, repo).catch(() => {});
+        res.writeHead(303, {
+          location: `/repo/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+        });
+        return res.end();
+      }
+
       const repoPage = path.match(REPO_PAGE_RE);
       if (req.method === "GET" && repoPage) {
         return send(
           res,
           200,
           renderRepoPage(store, decodeURIComponent(repoPage[1]), decodeURIComponent(repoPage[2])),
+        );
+      }
+
+      const itemPage = path.match(ITEM_RE);
+      if (req.method === "GET" && itemPage) {
+        return send(
+          res,
+          200,
+          renderItemPage(
+            store,
+            decodeURIComponent(itemPage[1]),
+            decodeURIComponent(itemPage[2]),
+            parseInt(itemPage[3], 10),
+          ),
         );
       }
 
@@ -447,38 +495,52 @@ function renderSidebar(
   </aside>`;
 }
 
-function renderInbox(store: Store, view: "open" | "done", repoFilter?: string): string {
+const DONE_PAGE_SIZE = 50;
+
+function renderInbox(
+  store: Store,
+  view: "open" | "done",
+  repoFilter?: string,
+  pageNum = 1,
+): string {
   const side = renderSidebar(store, { view, repo: repoFilter });
   const inRepo = (p: PendingDecision): boolean =>
     !repoFilter || `${p.owner}/${p.repo}` === repoFilter;
   const suffix = repoFilter ? ` · ${esc(repoFilter)}` : "";
 
   if (view === "done") {
-    const done = store.listDone(200).filter(inRepo);
-    const rows = done
-      .map((p) => {
-        const typeLabel = p.itemType === "pull_request" ? "PR" : "Issue";
-        const when = new Date(p.createdAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
-        // Ignored cards can be sent back to the inbox; replied/executed already
-        // wrote to GitHub and superseded ones have a newer card, so no undo there.
-        const restoreForm =
-          p.status === "ignored"
-            ? `<form method="post" action="/card/${p.id}/restore" class="inline">
-                 <input type="hidden" name="token" value="${esc(p.token)}">
-                 <button class="ghost">${icon("undo", 12)} ${t("恢复")}</button></form>`
-            : "";
-        return `<li class="hist"><span class="chip st-${esc(p.status)}">${esc(t(STATUS_LABEL[p.status] ?? p.status))}</span>
-          <span class="tag ${p.itemType === "pull_request" ? "tag-pr" : "tag-issue"}">${typeLabel}</span>
-          <a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">${esc(p.owner)}/${esc(p.repo)} #${p.number}</a>
-          <span class="meta lbl">${esc(clip(p.title, 90))}</span>
-          <span class="meta when">${esc(when)}</span>${restoreForm}</li>`;
-      })
+    // The done folder = cards you handled + the repo's closed issue/PR history
+    // (synced local archive), merged newest-first.
+    const cardRows = store.listDone(500).filter(inRepo).map((p) => ({
+      ts: p.createdAt,
+      html: renderDoneCardRow(p),
+    }));
+    const archRows = store.listClosedArchive(repoFilter, 500).map((it) => ({
+      ts: Date.parse(it.ghClosedAt ?? it.ghUpdatedAt) || 0,
+      html: renderArchiveRow(it),
+    }));
+    const all = [...cardRows, ...archRows].sort((a, b) => b.ts - a.ts);
+    const pages = Math.max(1, Math.ceil(all.length / DONE_PAGE_SIZE));
+    const cur = Math.min(pageNum, pages);
+    const rows = all
+      .slice((cur - 1) * DONE_PAGE_SIZE, cur * DONE_PAGE_SIZE)
+      .map((r) => r.html)
       .join("");
+    const pageUrl = (p: number): string =>
+      `/inbox?view=done${repoFilter ? `&repo=${encodeURIComponent(repoFilter)}` : ""}&p=${p}`;
+    const pager =
+      pages > 1
+        ? `<div class="pager">
+            ${cur > 1 ? `<a href="${pageUrl(cur - 1)}">‹ ${t("上一页")}</a>` : ""}
+            <span class="meta">${cur} / ${pages}</span>
+            ${cur < pages ? `<a href="${pageUrl(cur + 1)}">${t("下一页")} ›</a>` : ""}
+          </div>`
+        : "";
     return page(
       `${t("已处理")}${repoFilter ? ` · ${repoFilter}` : ""}`,
-      `<h1>${t("已处理")}${suffix}</h1>
+      `<h1>${t("已处理")}${suffix}${all.length ? `<span class="count">${all.length}</span>` : ""}</h1>
        ${rows
-         ? `<div class="panel"><ul class="histlist">${rows}</ul></div>`
+         ? `<div class="panel"><ul class="histlist">${rows}</ul></div>${pager}`
          : `<div class="empty"><span class="big">${icon("done", 36)}</span>${t("还没有已处理的记录")}${suffix ? "" : `<br><span class="meta">${t("回复 / 执行 / 忽略过的卡片会归档到这里")}</span>`}</div>`}`,
       { refreshSeconds: 60, side },
     );
@@ -486,6 +548,7 @@ function renderInbox(store: Store, view: "open" | "done", repoFilter?: string): 
 
   const open = store.listOpen().filter(inRepo);
   const cards = open.map(renderInboxCard).join("");
+
 
   // Repo management lives on the settings page; the inbox only shows cards.
   const emptyState = watchedRepoKeys(store).length
@@ -497,6 +560,98 @@ function renderInbox(store: Store, view: "open" | "done", repoFilter?: string): 
     `<h1>${t("待处理")}${suffix}${open.length ? `<span class="count">${open.length}</span>` : ""}</h1>
      ${cards || emptyState}`,
     { refreshSeconds: 60, side },
+  );
+}
+
+/** A handled card in the done list (your action + restore for ignored ones). */
+function renderDoneCardRow(p: PendingDecision): string {
+  const typeLabel = p.itemType === "pull_request" ? "PR" : "Issue";
+  // Ignored cards can be sent back to the inbox; replied/executed already
+  // wrote to GitHub and superseded ones have a newer card, so no undo there.
+  const restoreForm =
+    p.status === "ignored"
+      ? `<form method="post" action="/card/${p.id}/restore" class="inline">
+           <input type="hidden" name="token" value="${esc(p.token)}">
+           <button class="ghost">${icon("undo", 12)} ${t("恢复")}</button></form>`
+      : "";
+  return `<li class="hist"><span class="chip st-${esc(p.status)}">${esc(t(STATUS_LABEL[p.status] ?? p.status))}</span>
+    <span class="tag ${p.itemType === "pull_request" ? "tag-pr" : "tag-issue"}">${typeLabel}</span>
+    <a href="/item/${encodeURIComponent(p.owner)}/${encodeURIComponent(p.repo)}/${p.number}">${esc(p.owner)}/${esc(p.repo)} #${p.number}</a>
+    <span class="meta lbl">${esc(clip(p.title, 90))}</span>
+    <span class="meta when">${esc(fmtWhen(p.createdAt))}</span>${restoreForm}</li>`;
+}
+
+/** A closed issue/PR from the local history archive. */
+function renderArchiveRow(it: ArchiveItem): string {
+  const [owner, repo] = it.repoKey.split("/");
+  const typeLabel = it.itemType === "pull_request" ? "PR" : "Issue";
+  const stateChip = it.merged
+    ? `<span class="chip st-merged">${t("已合并")}</span>`
+    : `<span class="chip st-closed">${t("已关闭")}</span>`;
+  const when = it.ghClosedAt ? fmtWhen(Date.parse(it.ghClosedAt)) : "";
+  return `<li class="hist">${stateChip}
+    <span class="tag ${it.itemType === "pull_request" ? "tag-pr" : "tag-issue"}">${typeLabel}</span>
+    <a href="/item/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${it.number}">${esc(it.repoKey)} #${it.number}</a>
+    <span class="meta lbl">${esc(clip(it.title, 90))}</span>
+    ${it.commentCount ? `<span class="meta">${icon("msg", 12)} ${it.commentCount}</span>` : ""}
+    <span class="meta when">${esc(when)}</span></li>`;
+}
+
+// ---- archived item detail page (metadata + conversation timeline) ----
+
+function renderItemPage(store: Store, owner: string, repo: string, number: number): string {
+  const key = `${owner}/${repo}`;
+  const side = renderSidebar(store, { view: "done", repo: key });
+  const it =
+    store.getArchiveItem(key, "issue", number) ??
+    store.getArchiveItem(key, "pull_request", number);
+
+  if (!it) {
+    return page(
+      `${key} #${number}`,
+      `<h1>${esc(key)} #${number}</h1>
+       <div class="empty"><span class="big">${icon("clock", 36)}</span>${t("该条目尚未同步到本地档案")}<br>
+       <span class="meta">${t("历史会在轮询周期后自动回填，也可在仓库页手动同步")}</span></div>`,
+      { side },
+    );
+  }
+
+  const typeLabel = it.itemType === "pull_request" ? "PR" : "Issue";
+  const stateChip = it.merged
+    ? `<span class="chip st-merged">${t("已合并")}</span>`
+    : it.state === "closed"
+      ? `<span class="chip st-closed">${t("已关闭")}</span>`
+      : `<span class="chip st-open">${t("开放")}</span>`;
+  const labels = it.labels.length
+    ? `<span class="meta">${icon("tag", 12)} ${esc(it.labels.join(", "))}</span>`
+    : "";
+  const dates =
+    `<span class="meta">${t("创建于")} ${esc(fmtWhen(Date.parse(it.ghCreatedAt)))}` +
+    (it.ghClosedAt ? ` · ${t("关闭于")} ${esc(fmtWhen(Date.parse(it.ghClosedAt)))}` : "") +
+    `</span>`;
+
+  const entryLi = (e: { kind: string; author: string; createdAt: string; body: string; reviewState?: string }): string =>
+    `<li>
+      <div class="tlhead"><b>${esc(e.author)}</b>
+        ${e.kind === "review" ? `<span class="chip st-review">${esc(e.reviewState ?? "REVIEW")}</span>` : ""}
+        <span class="meta">${esc(fmtWhen(Date.parse(e.createdAt)))}</span></div>
+      ${e.body.trim() ? `<div class="tlbody">${esc(e.body)}</div>` : ""}</li>`;
+
+  const timeline = it.timeline.length
+    ? `<h2>${t("评论时间线")} (${it.timeline.length})</h2><ul class="tl">${it.timeline.map(entryLi).join("")}</ul>`
+    : `<p class="meta">${t("（没有评论）")}</p>`;
+
+  return page(
+    `${key} #${number}`,
+    `<div class="cardhead">${stateChip}
+       <span class="tag ${it.itemType === "pull_request" ? "tag-pr" : "tag-issue"}">${typeLabel}</span>
+       <b>${esc(key)}</b><span>#${it.number}</span>
+       <a class="ext" href="${esc(it.htmlUrl)}" target="_blank" rel="noopener">${t("在 GitHub 打开")} ${icon("ext", 12)}</a></div>
+     <h1>${esc(it.title)}</h1>
+     <p class="meta">${esc(it.author)} · ${dates} ${labels}</p>
+     ${it.body.trim() ? `<div class="panel"><div class="tlbody">${esc(it.body)}</div></div>` : ""}
+     ${timeline}`,
+    { side },
   );
 }
 
@@ -527,6 +682,20 @@ function renderRepoPage(store: Store, owner: string, repo: string): string {
     rec && !running
       ? `<span class="meta">${t("更新于")} ${fmtWhen(rec.updatedAt)}</span>`
       : "";
+
+  // Local history archive: closed count + sync status/trigger.
+  const syncState = store.getArchiveSync(key);
+  const syncRunning = syncState?.status === "running";
+  const closedCount = store.countClosedArchive(key);
+  const syncUrl = `/repo/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/sync`;
+  const syncBtn = syncRunning
+    ? `<button disabled class="ghost">${icon("clock", 13)} ${t("同步中…")}（${syncState?.synced ?? 0}）</button>`
+    : `<form method="post" action="${syncUrl}" class="inline"><button class="ghost">${icon("undo", 13)} ${t("同步历史")}</button></form>`;
+  const syncErr =
+    syncState?.status === "error"
+      ? `<span class="warn">${t("同步中断，将自动续跑")}：${esc(clip(syncState.error ?? "", 100))}</span>`
+      : "";
+  const archiveLine = `<div class="archline"><span class="meta">${t("历史档案")}：${closedCount} ${t("条已关闭的 issue/PR")}</span>${syncBtn}${syncErr}</div>`;
 
   let body: string;
   let commitChip = "";
@@ -562,8 +731,8 @@ function renderRepoPage(store: Store, owner: string, repo: string): string {
 
   return page(
     key,
-    `<div class="repohead"><h1>${esc(key)}</h1>${btn}${when}${commitChip}</div>${body}`,
-    { side, wide: true, refreshSeconds: running ? 8 : undefined },
+    `<div class="repohead"><h1>${esc(key)}</h1>${btn}${when}${commitChip}</div>${archiveLine}${body}`,
+    { side, wide: true, refreshSeconds: running || syncRunning ? 8 : undefined },
   );
 }
 
@@ -935,6 +1104,7 @@ function renderInboxCard(p: PendingDecision): string {
       : `<span class="tag tag-issue">Issue</span>`;
   return `<div class="card">
     <div class="cardhead">${tag}<b>${esc(p.owner)}/${esc(p.repo)}</b><span>#${p.number}</span>
+      <a class="ext" href="/item/${encodeURIComponent(p.owner)}/${encodeURIComponent(p.repo)}/${p.number}">${icon("clock", 12)} ${t("历史")}</a>
       <a class="ext" href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">${t("在 GitHub 打开")} ${icon("ext", 12)}</a></div>
     <div class="title">${esc(clip(p.title, 200))}</div>
     <div class="reasoning">${icon("spark", 14)} ${esc(clip(displayText(d.reasoning, d.reasoningEn), 600))} <span class="meta">${confLabel(conf)}</span></div>
@@ -1433,6 +1603,9 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
     background:var(--surface2);color:var(--muted);white-space:nowrap}
   .chip.st-replied,.chip.st-executed{background:var(--ok-bg);color:var(--ok)}
   .chip.st-superseded{background:#fdf3d0;color:#8a6a00}
+  .chip.st-merged{background:#efe7fd;color:#7d3fd6}
+  .chip.st-closed,.chip.st-review{background:var(--surface2);color:var(--muted)}
+  .chip.st-open{background:var(--ok-bg);color:var(--ok)}
   .sev{font-size:.72rem;font-weight:700;padding:.1rem .5rem;border-radius:99px;margin:0 .35rem}
   .sev-blocker{background:#fde3e3;color:#c02626} .sev-suggestion{background:#dcebff;color:#1d63d8}
   .sev-nit{background:var(--surface2);color:var(--muted)} .sev-question{background:#fdf3d0;color:#8a6a00}
@@ -1469,6 +1642,18 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
   .fdetail{margin:.45rem 0 0;font-size:.88rem;line-height:1.55}
   .fsug{margin-top:.5rem;font-size:.85rem;color:var(--ok);background:var(--ok-bg);
     border-radius:8px;padding:.4rem .6rem;display:flex;gap:.4rem;align-items:baseline}
+
+  /* history archive: done-list pager, repo sync line, item timeline */
+  .pager{display:flex;gap:1rem;justify-content:center;align-items:center;margin:1.1rem 0}
+  .archline{display:flex;align-items:center;gap:.8rem;flex-wrap:wrap;margin:-.4rem 0 1rem}
+  .archline button{font-size:.8rem;padding:.3rem .8rem}
+  .cardhead a.ext+a.ext{margin-left:.75rem}
+  ul.tl{list-style:none;padding:0;margin:0}
+  ul.tl li{border-left:2px solid var(--border);padding:.45rem 0 .55rem 1rem;margin:0 0 .3rem}
+  .tlhead{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+  .tlhead .chip{font-size:.68rem}
+  .tlbody{white-space:pre-wrap;word-wrap:break-word;font-size:.88rem;line-height:1.55;
+    margin-top:.3rem;color:var(--text)}
 
   /* buttons */
   button,a.btn{font:inherit;font-size:.88rem;font-weight:600;padding:.45rem 1.05rem;border:0;

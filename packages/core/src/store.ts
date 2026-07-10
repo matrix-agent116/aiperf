@@ -105,6 +105,36 @@ export class Store {
         error TEXT,                  -- message (status=error)
         updated_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS archive_items (
+        repo_key TEXT NOT NULL,      -- "owner/repo"
+        item_type TEXT NOT NULL,     -- issue | pull_request
+        number INTEGER NOT NULL,
+        state TEXT NOT NULL,         -- open | closed
+        merged INTEGER NOT NULL DEFAULT 0,
+        title TEXT NOT NULL,
+        author TEXT NOT NULL DEFAULT '',
+        html_url TEXT NOT NULL DEFAULT '',
+        labels_json TEXT NOT NULL DEFAULT '[]',
+        body TEXT NOT NULL DEFAULT '',
+        timeline_json TEXT NOT NULL DEFAULT '[]',
+        comment_count INTEGER NOT NULL DEFAULT 0,
+        gh_created_at TEXT NOT NULL DEFAULT '',
+        gh_closed_at TEXT,
+        gh_updated_at TEXT NOT NULL DEFAULT '',
+        synced_at INTEGER NOT NULL,
+        PRIMARY KEY (repo_key, item_type, number)
+      );
+      CREATE INDEX IF NOT EXISTS idx_archive_repo_state
+        ON archive_items(repo_key, state, gh_closed_at);
+      CREATE TABLE IF NOT EXISTS archive_sync (
+        repo_key TEXT PRIMARY KEY,
+        status TEXT NOT NULL,        -- running | done | error
+        cursor TEXT,                 -- newest gh_updated_at fully processed (resume point)
+        backfilled INTEGER NOT NULL DEFAULT 0,  -- 1 once the initial full pass completed
+        synced INTEGER NOT NULL DEFAULT 0,      -- items upserted across all runs
+        error TEXT,
+        updated_at INTEGER NOT NULL
+      );
     `);
     // Migrate DBs created before these columns existed.
     this.ensureColumn("pending", "token", "TEXT NOT NULL DEFAULT ''");
@@ -358,9 +388,211 @@ export class Store {
       .run(repoKey, status, json ?? null, error ?? null, Date.now());
   }
 
+  // ---- local issue/PR archive (full history, synced from GitHub) ----
+
+  upsertArchiveItem(item: ArchiveItem): void {
+    this.db
+      .prepare(
+        `INSERT INTO archive_items
+           (repo_key, item_type, number, state, merged, title, author, html_url,
+            labels_json, body, timeline_json, comment_count,
+            gh_created_at, gh_closed_at, gh_updated_at, synced_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(repo_key, item_type, number) DO UPDATE SET
+           state = excluded.state, merged = excluded.merged, title = excluded.title,
+           author = excluded.author, html_url = excluded.html_url,
+           labels_json = excluded.labels_json, body = excluded.body,
+           timeline_json = excluded.timeline_json, comment_count = excluded.comment_count,
+           gh_created_at = excluded.gh_created_at, gh_closed_at = excluded.gh_closed_at,
+           gh_updated_at = excluded.gh_updated_at, synced_at = excluded.synced_at`,
+      )
+      .run(
+        item.repoKey,
+        item.itemType,
+        item.number,
+        item.state,
+        item.merged ? 1 : 0,
+        item.title,
+        item.author,
+        item.htmlUrl,
+        JSON.stringify(item.labels),
+        item.body,
+        JSON.stringify(item.timeline),
+        item.commentCount,
+        item.ghCreatedAt,
+        item.ghClosedAt,
+        item.ghUpdatedAt,
+        Date.now(),
+      );
+  }
+
+  getArchiveItem(
+    repoKey: string,
+    itemType: string,
+    number: number,
+  ): ArchiveItem | null {
+    const row = this.db
+      .prepare(
+        "SELECT * FROM archive_items WHERE repo_key = ? AND item_type = ? AND number = ?",
+      )
+      .get(repoKey, itemType, number) as ArchiveRow | undefined;
+    return row ? rowToArchive(row) : null;
+  }
+
+  /** Closed archive items, newest-closed first, for the 已处理 folder. */
+  listClosedArchive(repoKey: string | undefined, limit: number, offset = 0): ArchiveItem[] {
+    const where = repoKey ? "repo_key = ? AND state = 'closed'" : "state = 'closed'";
+    const args: (string | number)[] = repoKey ? [repoKey] : [];
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM archive_items WHERE ${where}
+         ORDER BY gh_closed_at DESC LIMIT ? OFFSET ?`,
+      )
+      .all(...args, limit, offset) as unknown as ArchiveRow[];
+    return rows.map(rowToArchive);
+  }
+
+  countClosedArchive(repoKey?: string): number {
+    const where = repoKey ? "repo_key = ? AND state = 'closed'" : "state = 'closed'";
+    const args = repoKey ? [repoKey] : [];
+    const row = this.db
+      .prepare(`SELECT COUNT(*) AS n FROM archive_items WHERE ${where}`)
+      .get(...args) as { n: number };
+    return row.n;
+  }
+
+  getArchiveSync(repoKey: string): ArchiveSyncState | null {
+    const row = this.db
+      .prepare("SELECT * FROM archive_sync WHERE repo_key = ?")
+      .get(repoKey) as
+      | { repo_key: string; status: string; cursor: string | null; backfilled: number; synced: number; error: string | null; updated_at: number }
+      | undefined;
+    if (!row) return null;
+    return {
+      repoKey: row.repo_key,
+      status: row.status as ArchiveSyncState["status"],
+      cursor: row.cursor,
+      backfilled: !!row.backfilled,
+      synced: row.synced,
+      error: row.error,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  setArchiveSync(
+    repoKey: string,
+    patch: Partial<Pick<ArchiveSyncState, "status" | "cursor" | "backfilled" | "synced" | "error">>,
+  ): void {
+    const cur = this.getArchiveSync(repoKey);
+    const next = {
+      status: patch.status ?? cur?.status ?? "running",
+      cursor: patch.cursor !== undefined ? patch.cursor : (cur?.cursor ?? null),
+      backfilled: patch.backfilled !== undefined ? patch.backfilled : (cur?.backfilled ?? false),
+      synced: patch.synced !== undefined ? patch.synced : (cur?.synced ?? 0),
+      error: patch.error !== undefined ? patch.error : null,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO archive_sync (repo_key, status, cursor, backfilled, synced, error, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(repo_key) DO UPDATE SET
+           status = excluded.status, cursor = excluded.cursor,
+           backfilled = excluded.backfilled, synced = excluded.synced,
+           error = excluded.error, updated_at = excluded.updated_at`,
+      )
+      .run(
+        repoKey,
+        next.status,
+        next.cursor,
+        next.backfilled ? 1 : 0,
+        next.synced,
+        next.error,
+        Date.now(),
+      );
+  }
+
   close(): void {
     this.db.close();
   }
+}
+
+/** One entry of an item's conversation history (issue comment or PR review). */
+export interface TimelineEntry {
+  kind: "comment" | "review";
+  author: string;
+  createdAt: string;
+  body: string;
+  /** review only: APPROVED / CHANGES_REQUESTED / COMMENTED / DISMISSED */
+  reviewState?: string;
+}
+
+/** A locally archived issue/PR: metadata + full conversation timeline. */
+export interface ArchiveItem {
+  repoKey: string;
+  itemType: "issue" | "pull_request";
+  number: number;
+  state: "open" | "closed";
+  merged: boolean;
+  title: string;
+  author: string;
+  htmlUrl: string;
+  labels: string[];
+  body: string;
+  timeline: TimelineEntry[];
+  commentCount: number;
+  ghCreatedAt: string;
+  ghClosedAt: string | null;
+  ghUpdatedAt: string;
+}
+
+export interface ArchiveSyncState {
+  repoKey: string;
+  status: "running" | "done" | "error";
+  /** newest gh_updated_at fully processed — resume/incremental point */
+  cursor: string | null;
+  backfilled: boolean;
+  synced: number;
+  error: string | null;
+  updatedAt: number;
+}
+
+interface ArchiveRow {
+  repo_key: string;
+  item_type: string;
+  number: number;
+  state: string;
+  merged: number;
+  title: string;
+  author: string;
+  html_url: string;
+  labels_json: string;
+  body: string;
+  timeline_json: string;
+  comment_count: number;
+  gh_created_at: string;
+  gh_closed_at: string | null;
+  gh_updated_at: string;
+  synced_at: number;
+}
+
+function rowToArchive(row: ArchiveRow): ArchiveItem {
+  return {
+    repoKey: row.repo_key,
+    itemType: row.item_type as ArchiveItem["itemType"],
+    number: row.number,
+    state: row.state as ArchiveItem["state"],
+    merged: !!row.merged,
+    title: row.title,
+    author: row.author,
+    htmlUrl: row.html_url,
+    labels: JSON.parse(row.labels_json) as string[],
+    body: row.body,
+    timeline: JSON.parse(row.timeline_json) as TimelineEntry[],
+    commentCount: row.comment_count,
+    ghCreatedAt: row.gh_created_at,
+    ghClosedAt: row.gh_closed_at,
+    ghUpdatedAt: row.gh_updated_at,
+  };
 }
 
 export interface RepoAnalysisRecord {

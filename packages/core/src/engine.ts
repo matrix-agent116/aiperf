@@ -5,6 +5,7 @@ import { pollRepo } from "./github/poller.ts";
 import { configureGithub } from "./github/client.ts";
 import { judge } from "./judge/judge.ts";
 import { analyzeRepo } from "./judge/repo-analysis.ts";
+import { syncRepoArchive } from "./github/archive.ts";
 import { postReply, executeSuggestedAction } from "./github/actions.ts";
 import { itemKey } from "./types.ts";
 
@@ -174,6 +175,32 @@ export class TriageEngine extends EventEmitter<EngineEvents> {
     }
   }
 
+  // ---- local issue/PR history archive (read-only sync from GitHub) ----
+
+  private archiveRunning = new Set<string>();
+
+  /**
+   * Backfill/refresh a repo's issue+PR history into the local archive. Resumable
+   * (cursor persists per item) and idempotent; concurrent calls per repo no-op.
+   * Any open card whose item turns out to be closed on GitHub is auto-archived —
+   * closed items only need their history, there is nothing left to confirm.
+   */
+  async runArchiveSync(owner: string, repo: string): Promise<void> {
+    const key = `${owner}/${repo}`;
+    if (this.archiveRunning.has(key)) return;
+    this.archiveRunning.add(key);
+    try {
+      const { closed } = await syncRepoArchive(owner, repo, this.store);
+      for (const c of closed) {
+        for (const stale of this.store.findOpenForItem(owner, repo, c.itemType, c.number, "")) {
+          this.finalize(stale.id, "superseded", "🔒 该 issue/PR 已在 GitHub 上关闭，已归档");
+        }
+      }
+    } finally {
+      this.archiveRunning.delete(key);
+    }
+  }
+
   /** Record a PR review submitted via the review page (the page does the GitHub write). */
   noteReviewSubmitted(id: string, receipt: string, url?: string): FinalizedEvent {
     return this.finalize(id, "replied", receipt, url);
@@ -276,6 +303,13 @@ export class TriageEngine extends EventEmitter<EngineEvents> {
 
     this.emit("cycle", { phase: "done" });
     console.log("[poll] cycle done");
+
+    // Keep the local history archive in step, off the cycle's critical path:
+    // first run backfills everything (resumable), later runs are cheap
+    // incremental pulls from the per-repo cursor.
+    for (const rc of app.repos) {
+      void this.runArchiveSync(rc.owner, rc.repo);
+    }
   }
 }
 
