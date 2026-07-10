@@ -433,7 +433,7 @@ function renderInbox(store: Store, view: "open" | "done", repoFilter?: string): 
     : `<div class="empty"><span class="big">${icon("repo", 36)}</span>${t("还没有监控任何仓库")}<br><span class="meta">${t('到<a href="/settings">设置</a>里添加一个 GitHub 仓库，轮询就会开始')}</span></div>`;
 
   return page(
-    `Inbox (${open.length})`,
+    `${t("待处理")}${repoFilter ? ` · ${repoFilter}` : ""}${open.length ? ` (${open.length})` : ""}`,
     `<h1>${t("待处理")}${suffix}${open.length ? `<span class="count">${open.length}</span>` : ""}</h1>
      ${cards || emptyState}`,
     { refreshSeconds: 60, side },
