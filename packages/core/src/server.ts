@@ -513,6 +513,21 @@ function renderSetupWizard(): string {
   );
 }
 
+/**
+ * 中文/English dropdown for the content languages. The stored value feeds the judge
+ * prompt verbatim; a legacy/custom value (anything else) is kept as an extra option
+ * instead of being silently replaced.
+ */
+function langSelect(id: string, current: string): string {
+  const cur = current.trim() || "中文";
+  const std = ["中文", "English"];
+  const extra = std.includes(cur) ? "" : `<option value="${esc(cur)}" selected>${esc(cur)}</option>`;
+  return `<select id="${id}">
+    ${std.map((l) => `<option value="${l}" ${cur === l ? "selected" : ""}>${l}</option>`).join("")}
+    ${extra}
+  </select>`;
+}
+
 // ---- settings panel ----
 
 function renderSettingsPage(store: Store, engine: TriageEngine): string {
@@ -565,9 +580,9 @@ function renderSettingsPage(store: Store, engine: TriageEngine): string {
            <option value="en" ${raw.ui_language === "en" ? "selected" : ""}>English</option>
          </select></label>
        <label class="field">${t("展示语言（判定内容给你看的语言：判断依据、草稿预览）")}
-         <input id="s-displang" type="text" value="${v(raw.display_language, "中文")}"></label>
+         ${langSelect("s-displang", String(raw.display_language ?? "中文"))}</label>
        <label class="field">${t("发布语言（回复和 Review 实际发布到 GitHub 使用的语言）")}
-         <input id="s-postlang" type="text" value="${v(raw.post_language, "English")}"></label>
+         ${langSelect("s-postlang", String(raw.post_language ?? "English"))}</label>
      </div>
 
      <h2>${icon("repo", 13)} ${t("仓库")}</h2>
