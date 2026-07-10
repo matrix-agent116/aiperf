@@ -130,6 +130,19 @@ export class TriageEngine extends EventEmitter<EngineEvents> {
     return this.finalize(id, "ignored", "🚫 已忽略");
   }
 
+  /** Move an ignored card back to the open inbox. No GitHub write. */
+  restore(id: string): FinalizedEvent {
+    const p = this.store.getPending(id);
+    if (!p) throw new Error("卡片不存在");
+    if (p.status !== "ignored") throw new Error("只有已忽略的卡片可以恢复");
+    // A newer card for the same item may have arrived since this one was ignored;
+    // restoring alongside it would put two live cards for one item in the inbox.
+    if (this.store.findOpenForItem(p.owner, p.repo, p.itemType, p.number, p.id).length) {
+      throw new Error("该 issue/PR 已有新的待处理卡片，无需恢复");
+    }
+    return this.finalize(id, "pending", "↩️ 已恢复为待处理");
+  }
+
   /** Record a PR review submitted via the review page (the page does the GitHub write). */
   noteReviewSubmitted(id: string, receipt: string, url?: string): FinalizedEvent {
     return this.finalize(id, "replied", receipt, url);

@@ -42,6 +42,7 @@ const EN: Record<string, string> = {
   "草稿回复（点开审阅/编辑）": "Draft reply (open to review / edit)",
   "批准并回复": "Approve & reply",
   "忽略": "Ignore",
+  "恢复": "Restore",
   "建议动作": "Suggested action",
   "执行": "Execute",
   "逐条审核并提交": "Review points & submit",
@@ -149,7 +150,7 @@ function outgoingLabel(editable = false): string {
 
 const REPLY_RE = /^\/reply\/([A-Za-z0-9_-]+)\/?$/;
 const REVIEW_RE = /^\/review\/([A-Za-z0-9_-]+)\/?$/;
-const CARD_ACTION_RE = /^\/card\/([A-Za-z0-9_-]+)\/(reply|act|ignore)\/?$/;
+const CARD_ACTION_RE = /^\/card\/([A-Za-z0-9_-]+)\/(reply|act|ignore|restore)\/?$/;
 
 /**
  * Local HTTP service that IS the app UI (the desktop shell loads these pages).
@@ -373,7 +374,7 @@ function renderSidebar(
   };
 
   return `<aside class="side">
-    <div class="sbrand"><span class="mark">${icon("pr", 15)}</span>GH Triage</div>
+    <div class="sbrand"><span class="mark">${icon("pr", 15)}</span>Git Triage</div>
     <nav class="snav">
       ${folder("open", icon("inbox"), t("待处理"), totalOpen)}
       <div class="sgap"></div>
@@ -398,11 +399,19 @@ function renderInbox(store: Store, view: "open" | "done", repoFilter?: string): 
       .map((p) => {
         const typeLabel = p.itemType === "pull_request" ? "PR" : "Issue";
         const when = new Date(p.createdAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+        // Ignored cards can be sent back to the inbox; replied/executed already
+        // wrote to GitHub and superseded ones have a newer card, so no undo there.
+        const restoreForm =
+          p.status === "ignored"
+            ? `<form method="post" action="/card/${p.id}/restore" class="inline">
+                 <input type="hidden" name="token" value="${esc(p.token)}">
+                 <button class="ghost">${icon("undo", 12)} ${t("恢复")}</button></form>`
+            : "";
         return `<li class="hist"><span class="chip st-${esc(p.status)}">${esc(t(STATUS_LABEL[p.status] ?? p.status))}</span>
           <span class="tag ${p.itemType === "pull_request" ? "tag-pr" : "tag-issue"}">${typeLabel}</span>
           <a href="${esc(p.htmlUrl)}" target="_blank" rel="noopener">${esc(p.owner)}/${esc(p.repo)} #${p.number}</a>
           <span class="meta lbl">${esc(clip(p.title, 90))}</span>
-          <span class="meta when">${esc(when)}</span></li>`;
+          <span class="meta when">${esc(when)}</span>${restoreForm}</li>`;
       })
       .join("");
     return page(
@@ -463,7 +472,7 @@ function renderSetupWizard(): string {
     `<div class="wizard">
      <div class="whead">
        <span class="logo mark">${icon("pr", 26)}</span>
-       <h1>欢迎使用 GH Triage</h1>
+       <h1>欢迎使用 Git Triage</h1>
        <p class="meta">两步完成初始设置。仓库不在这里添加 —— 完成后在「设置」里随时添加。</p>
      </div>
 
@@ -764,6 +773,8 @@ async function handleCardAction(
   try {
     if (action === "ignore") {
       engine.ignore(id);
+    } else if (action === "restore") {
+      engine.restore(id);
     } else if (action === "act") {
       await engine.executeAction(id);
     } else {
@@ -1249,7 +1260,7 @@ ${opts?.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeco
   li.hist{display:flex;align-items:center;gap:.55rem;padding:.5rem .1rem;font-size:.88rem;
     border-bottom:1px solid var(--border2);flex-wrap:wrap}
   li.hist:last-child{border-bottom:0}
-  li.hist form.inline{margin-left:auto}
+  li.hist form.inline{margin-left:.4rem;flex:none}
   li.hist form.inline button{font-size:.78rem;padding:.12rem .55rem}
 
   /* language tabs */
@@ -1334,6 +1345,7 @@ const ICON_PATHS: Record<string, string> = {
   spark: '<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
   ban: '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
+  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/>',
   save: '<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>',
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
   msg: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
