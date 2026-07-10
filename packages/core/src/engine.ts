@@ -248,13 +248,15 @@ export class TriageEngine extends EventEmitter<EngineEvents> {
 /**
  * Wire the Claude auth from settings into the environment the Agent SDK (and its
  * spawned CLI) reads. Empty token = clear overrides and use the machine's Claude
- * Code login. "sk-ant-…" is an API key; anything else is a Claude Code OAuth token.
+ * Code login. Claude Code OAuth tokens ALSO start with "sk-ant-" (sk-ant-oat01-…),
+ * so match their prefix first; only other sk-ant-… tokens are API keys.
  */
 function applyClaudeAuth(token: string): void {
   const t = token.trim();
   delete process.env.ANTHROPIC_API_KEY;
   delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
   if (!t) return;
-  if (t.startsWith("sk-ant-")) process.env.ANTHROPIC_API_KEY = t;
+  if (t.startsWith("sk-ant-oat")) process.env.CLAUDE_CODE_OAUTH_TOKEN = t;
+  else if (t.startsWith("sk-ant-")) process.env.ANTHROPIC_API_KEY = t;
   else process.env.CLAUDE_CODE_OAUTH_TOKEN = t;
 }

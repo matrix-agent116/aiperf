@@ -19,7 +19,8 @@ export const SettingsSchema = z.object({
   github_token: z.string().min(1, "GitHub token 不能为空"),
   /**
    * Claude auth override. Empty = use the machine's Claude Code login (Keychain).
-   * "sk-ant-…" is treated as an API key, anything else as a Claude Code OAuth token.
+   * "sk-ant-oat…" (and any non-sk-ant value) is a Claude Code OAuth token;
+   * other "sk-ant-…" values are API keys.
    */
   claude_token: z.string().default(""),
   poll_interval_minutes: z.number().positive().default(5),

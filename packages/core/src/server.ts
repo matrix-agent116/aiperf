@@ -249,7 +249,7 @@ function renderSetupWizard(): string {
          <option value="claude-sonnet-5"></option>
          <option value="claude-haiku-4-5-20251001"></option>
        </datalist>
-       <label class="field">Claude Token（可选。留空 = 使用本机 Claude Code 登录态；sk-ant-… 视为 API Key，其余视为订阅 OAuth token）
+       <label class="field">Claude Token（可选。留空 = 使用本机 Claude Code 登录态；sk-ant-oat… 视为订阅 OAuth token，其他 sk-ant-… 视为 API Key）
          <input id="w-claude" type="password" autocomplete="off"></label>
        <div class="actions"><button onclick="go(2)">下一步 →</button></div>
      </div>
@@ -374,7 +374,7 @@ function renderSettingsPage(store: Store, engine: TriageEngine): string {
      <div class="panel">
        <label class="field">GitHub Token（需要对所监控仓库的写权限）
          <input id="s-github" type="password" autocomplete="off" value="${v(raw.github_token, "")}"></label>
-       <label class="field">Claude Token（可选。留空 = 使用本机 Claude Code 登录态；sk-ant-… 视为 API Key，其余视为订阅 OAuth token）
+       <label class="field">Claude Token（可选。留空 = 使用本机 Claude Code 登录态；sk-ant-oat… 视为订阅 OAuth token，其他 sk-ant-… 视为 API Key）
          <input id="s-claude" type="password" autocomplete="off" value="${v(raw.claude_token, "")}"></label>
      </div>
 
